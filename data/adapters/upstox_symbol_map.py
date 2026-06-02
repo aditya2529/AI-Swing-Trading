@@ -47,6 +47,17 @@ ALL_MAPPINGS: dict[str, str] = {
     # Infra / Telecom
     "BHARTIARTL.NS": "NSE_EQ|INE397D01024",
     "LT.NS":         "NSE_EQ|INE018A01030",
+
+    # ── Point-in-time NSE-25 additions (2026-06-02) ──────────────────────
+    # New names in data/universe.py vs the original intraday set. ISINs from
+    # public NSE records — VERIFY against the Upstox instrument master before
+    # any prod use (sandbox fails loudly on a wrong key; no money risk).
+    "YESBANK.NS":    "NSE_EQ|INE528G01035",
+    "GAIL.NS":       "NSE_EQ|INE129A01019",
+    "LUPIN.NS":      "NSE_EQ|INE326A01037",
+    "VEDL.NS":       "NSE_EQ|INE205A01025",
+    "ITC.NS":        "NSE_EQ|INE154A01025",
+    "TATAMOTORS.NS": "NSE_EQ|INE155A01022",
 }
 
 

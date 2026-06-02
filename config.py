@@ -16,6 +16,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from data.universe import POINT_IN_TIME_NSE25, SECTORS
+
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent
@@ -30,41 +32,10 @@ BACKUP_DIR = _DATA_DIR / "backups"               # timestamped DB/config backups
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Universe ────────────────────────────────────────────────────────────
-# Starter 25-symbol NSE set spanning 8 sectors (Yahoo Finance format).
-# This is a TODAY-liquid list and therefore survivorship-biased; the
-# point-in-time universe (incl. later-delisted names) is finalised in
-# Phase 0 Step D before any backtest — see data/universe.py.
-DEFAULT_SYMBOLS = [
-    # IT (4)
-    "TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS",
-    # Banking & Finance (5)
-    "HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS", "AXISBANK.NS", "SBIN.NS",
-    # Energy & Oil (3)
-    "RELIANCE.NS", "ONGC.NS", "BPCL.NS",
-    # Auto (3)
-    "MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS",
-    # Pharma (3)
-    "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS",
-    # FMCG (3)
-    "HINDUNILVR.NS", "NESTLEIND.NS", "BRITANNIA.NS",
-    # Metals & Mining (2)
-    "TATASTEEL.NS", "HINDALCO.NS",
-    # Telecom & Infra (2)
-    "BHARTIARTL.NS", "LT.NS",
-]
-
-# Sector tags drive the "max positions per sector" cap (§2b portfolio heat).
-SECTORS = {
-    "TCS.NS": "IT", "INFY.NS": "IT", "WIPRO.NS": "IT", "HCLTECH.NS": "IT",
-    "HDFCBANK.NS": "BANK", "ICICIBANK.NS": "BANK", "KOTAKBANK.NS": "BANK",
-    "AXISBANK.NS": "BANK", "SBIN.NS": "BANK",
-    "RELIANCE.NS": "ENERGY", "ONGC.NS": "ENERGY", "BPCL.NS": "ENERGY",
-    "MARUTI.NS": "AUTO", "M&M.NS": "AUTO", "BAJAJ-AUTO.NS": "AUTO",
-    "SUNPHARMA.NS": "PHARMA", "DRREDDY.NS": "PHARMA", "CIPLA.NS": "PHARMA",
-    "HINDUNILVR.NS": "FMCG", "NESTLEIND.NS": "FMCG", "BRITANNIA.NS": "FMCG",
-    "TATASTEEL.NS": "METAL", "HINDALCO.NS": "METAL",
-    "BHARTIARTL.NS": "TELECOM", "LT.NS": "INFRA",
-}
+# Single source of truth: data/universe.py defines the point-in-time NSE-25
+# (sector-balanced, retaining names that later fell from NIFTY 50 as the
+# survivorship correction). SECTORS is re-exported for the per-sector cap.
+DEFAULT_SYMBOLS = list(POINT_IN_TIME_NSE25)
 
 # Macro context symbols (also backfilled in Step D).
 REGIME_INDEX = "^NSEI"        # NIFTY 50 — the regime filter benchmark
