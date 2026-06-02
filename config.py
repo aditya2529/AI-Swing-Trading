@@ -1,0 +1,126 @@
+"""Central configuration for the AI Swing Trading system.
+
+Rules-based breakout swing on DAILY bars. NO ML in v1 by design
+(see SWING_PROJECT_BOOTSTRAP.md §2a). Secrets are loaded from .env and
+never hard-coded here.
+
+Execution convention (the spine of the look-ahead defence):
+    decide at day-T CLOSE  →  enter at day-T+1 OPEN.
+At the decision moment (after close on day T) day-T's full OHLC has
+already resolved, so the decision may use bars up to and including T.
+The only day-T+1 value ever touched is open[T+1] (the fill). See
+backtesting/replay.py + tests/test_lookahead_regression.py.
+"""
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).parent
+
+# On a cloud host, set DATA_DIR to a persistent volume mount; locally it
+# defaults to the project folder.
+_DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
+DB_PATH = _DATA_DIR / "market_data.db"
+MODELS_DIR = _DATA_DIR / "models" / "saved"      # reserved for a future ML phase
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR = _DATA_DIR / "backups"               # timestamped DB/config backups (LAW 7)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Universe ────────────────────────────────────────────────────────────
+# Starter 25-symbol NSE set spanning 8 sectors (Yahoo Finance format).
+# This is a TODAY-liquid list and therefore survivorship-biased; the
+# point-in-time universe (incl. later-delisted names) is finalised in
+# Phase 0 Step D before any backtest — see data/universe.py.
+DEFAULT_SYMBOLS = [
+    # IT (4)
+    "TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS",
+    # Banking & Finance (5)
+    "HDFCBANK.NS", "ICICIBANK.NS", "KOTAKBANK.NS", "AXISBANK.NS", "SBIN.NS",
+    # Energy & Oil (3)
+    "RELIANCE.NS", "ONGC.NS", "BPCL.NS",
+    # Auto (3)
+    "MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS",
+    # Pharma (3)
+    "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS",
+    # FMCG (3)
+    "HINDUNILVR.NS", "NESTLEIND.NS", "BRITANNIA.NS",
+    # Metals & Mining (2)
+    "TATASTEEL.NS", "HINDALCO.NS",
+    # Telecom & Infra (2)
+    "BHARTIARTL.NS", "LT.NS",
+]
+
+# Sector tags drive the "max positions per sector" cap (§2b portfolio heat).
+SECTORS = {
+    "TCS.NS": "IT", "INFY.NS": "IT", "WIPRO.NS": "IT", "HCLTECH.NS": "IT",
+    "HDFCBANK.NS": "BANK", "ICICIBANK.NS": "BANK", "KOTAKBANK.NS": "BANK",
+    "AXISBANK.NS": "BANK", "SBIN.NS": "BANK",
+    "RELIANCE.NS": "ENERGY", "ONGC.NS": "ENERGY", "BPCL.NS": "ENERGY",
+    "MARUTI.NS": "AUTO", "M&M.NS": "AUTO", "BAJAJ-AUTO.NS": "AUTO",
+    "SUNPHARMA.NS": "PHARMA", "DRREDDY.NS": "PHARMA", "CIPLA.NS": "PHARMA",
+    "HINDUNILVR.NS": "FMCG", "NESTLEIND.NS": "FMCG", "BRITANNIA.NS": "FMCG",
+    "TATASTEEL.NS": "METAL", "HINDALCO.NS": "METAL",
+    "BHARTIARTL.NS": "TELECOM", "LT.NS": "INFRA",
+}
+
+# Macro context symbols (also backfilled in Step D).
+REGIME_INDEX = "^NSEI"        # NIFTY 50 — the regime filter benchmark
+VIX_SYMBOL = "^INDIAVIX"      # India VIX — optional context
+
+# ── Data settings ───────────────────────────────────────────────────────
+DATA_ADAPTER = os.getenv("DATA_ADAPTER", "yfinance")   # 'upstox' for backfill
+DAILY_RESOLUTION = "1d"
+DEFAULT_YEARS = 10            # ~10 years of daily history
+
+# ── Breakout entry rules (§2b — mandatory craft filters) ────────────────
+BREAKOUT_LOOKBACK = 20        # break above the prior N-day high (Donchian upper)
+VOLUME_AVG_WINDOW = 20        # window for average-volume baseline
+VOLUME_MULT = 1.5            # breakout-day volume must exceed 1.5× the 20-day avg
+REGIME_MA = 50               # long only when NIFTY 50 > its own 50-day MA
+
+# ── Risk & exits (§2b, LAW 6 — sacred, change only with sign-off) ───────
+ATR_PERIOD = 14
+ATR_SL_MULTIPLIER = 2.0       # initial hard stop = entry − 2× ATR (spec: 1.5–2×)
+CHANDELIER_ATR_MULT = 3.0     # trailing exit = (highest high since entry) − 3× ATR
+MIN_RR = 2.0                  # R:R floor for entry screening (≥ 2:1)
+MAX_RISK_PCT = 0.01           # 1% of portfolio risked per trade (spec: 1–2%)
+MAX_POSITIONS = 6             # concurrent open positions (spec: 5–8)
+MAX_PORTFOLIO_HEAT = 0.08     # cap sum of open risk at 8% (spec: 6–8%)
+MAX_PER_SECTOR = 3            # max concurrent positions in one sector
+MIN_HOLD_DAYS = 3             # minimum hold before discretionary exit
+MAX_HOLD_DAYS = 10            # time-based exit ceiling
+EARNINGS_BLACKOUT_DAYS = 2    # no entry within N trading days of known earnings
+
+# ── Execution model (shared by backtest replay AND paper engine) ────────
+# decide at day-T close → fill at day-T+1 open. Costs applied on each fill.
+BROKERAGE_PCT = 0.0003        # 0.03%
+SLIPPAGE_PCT = 0.001          # 0.10%
+INITIAL_CAPITAL = 500_000.0
+
+# ── Success gates (bootstrap §5) ────────────────────────────────────────
+GATE_PROFIT_FACTOR = 1.3
+GATE_SHARPE = 1.0
+GATE_MAX_DRAWDOWN = 0.15
+GATE_WIN_RATE = 0.45
+PERIODS_PER_YEAR = 252        # trading days/year (daily bars)
+
+# ── Alerts (Phase 4 — paper trading; filled from .env) ──────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "")
+ALERT_EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD", "")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
+ALERT_EMAIL_SMTP_HOST = os.getenv("ALERT_EMAIL_SMTP_HOST", "smtp.gmail.com")
+ALERT_EMAIL_SMTP_PORT = int(os.getenv("ALERT_EMAIL_SMTP_PORT", "587"))
+
+# ── Upstox historical API (backfill) ────────────────────────────────────
+# The adapter reads UPSTOX_ENV + UPSTOX_{ENV}_ACCESS_TOKEN directly from
+# .env on each call; these mirrors exist for the OAuth helper + logging.
+UPSTOX_ENV = os.getenv("UPSTOX_ENV", "")
+UPSTOX_REDIRECT_URI = os.getenv(
+    "UPSTOX_REDIRECT_URI", "http://127.0.0.1:8000/upstox/callback"
+)

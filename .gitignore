@@ -1,0 +1,36 @@
+# ── Secrets / credentials (NEVER commit) ────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pub
+ssh-key-*
+
+# ── Data / databases (large, regenerable via backfill) ──────────────────
+*.db
+*.db-wal
+*.db-shm
+backups/
+
+# ── Model artifacts (future ML phase) ───────────────────────────────────
+models/saved/
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ── Logs / reports ──────────────────────────────────────────────────────
+logs/*.log
+*.report.json
+
+# ── OS / editor cruft ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

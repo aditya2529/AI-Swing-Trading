@@ -1,0 +1,10 @@
+# AI Swing Trading — runtime dependencies
+# Rules-based breakout swing v1: NO ML libraries by design (bootstrap §2a).
+# (torch / xgboost / hmmlearn / shap / scikit-learn are intentionally absent;
+#  they only return if an ML filter provably beats the simple version later.)
+pandas>=2.0
+numpy>=1.26
+yfinance>=0.2.40       # free daily backfill + cross-source reconciliation
+requests>=2.31         # Upstox historical REST adapter
+python-dotenv>=1.0     # .env secret loading
+pytest>=8.0            # the look-ahead gate + replay-contract tests
