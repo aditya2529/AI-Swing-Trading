@@ -314,13 +314,37 @@ The classification logic is best-effort and known to be wrong in edge cases. Ops
 - **Recommended handling:** keep-as-is
 - **Reasoning:** Large move (-20.1%) on heavy volume (×10.7 20d-avg). No yfinance corp-action match. Consistent with a real event (news, crash, takeover collapse).
 
-## Sign-off (required before T1.B)
+## Sign-off (T1.B APPLIED 2026-06-03)
 
-Per LAW 7 (reproducibility & backup), no DB write happens until ops reviews this report and confirms each must-classify event's recommended handling. T1.B will then:
+Ops reviewed and signed off with one rejection. T1.B has been applied on this branch.
 
-1. Back up `market_data.db` to `backups/market_data_<ts>_pre_t1.db`.
-2. Apply approved handling per event (back-adjust = multiply pre-ex prices by the ratio across the full series; flag = annotate without mutating; keep-as-is = no change).
-3. Add a regression test verifying the post-adjust prices for each canonical case (VEDL demerger, etc.).
-4. Re-run gate + validator; commit on this branch; await push call.
+### Final disposition
+
+| Event | Heuristic class | Ops decision | T1.B action |
+|---|---|---|---|
+| VEDL.NS 2026-04-30 (-64.9%) | demerger_known | APPROVE | back-adjusted (factor 0.351021, 2451 pre-ex rows) |
+| TATAMOTORS.NS 2025-10-14 (-40.2%) | demerger_suspected | APPROVE (verified: NIFTY -0.32%, price held) | back-adjusted (factor 0.598487, 2318 pre-ex rows) |
+| VEDL.NS 2020-03-23 (-23.9%) | demerger_suspected | **REJECT** — COVID crash (NIFTY -13.0%, 23/26 universe down >5%, multi-session bounce) | keep-as-is; locked by regression test |
+| YESBANK.NS 2020-03-06 (-56.1%) | real_event_known | KEEP (canonical) | keep-as-is; locked by regression test |
+| 16 × real_event (YESBANK crisis, AXIS/SBIN/etc.) | real_event | KEEP | no change |
+| YESBANK.NS 2020-03-16 +45.2%, 2020-03-17 +58.1% | uncertain | KEEP/flag (rescue rebounds) | no change; remain flagged |
+| 105 watchlist (12-20%) | watchlist | no action | no change |
+
+### Artifacts
+
+- **Backup (LAW 7):** `backups/market_data_20260603T150529Z_pre_t1b.db`
+- **Application log:** `logs/r1_t1b_application.md`
+- **Regression test:** `tests/test_t1_corp_action_adjustments.py` (9 assertions, all GREEN)
+- **Total tests:** 25 / 25 pass
+
+### Locked invariants (these will RED any code that tries to "fix" a real crash)
+
+- VEDL.NS daily return on 2020-03-23 == -23.95% (within 1e-4 tolerance) — COVID crash signal preserved through future scalar back-adjustments
+- YESBANK.NS daily return on 2020-03-06 == -56.11% (within 1e-4 tolerance) — moratorium signal preserved
+- YESBANK.NS 2020-03-06 absolute OHLCV unchanged from captured reference — YESBANK has no approved adjustment, so prices are literal
+
+### T2 carry-forward (required note)
+
+Upstox historical data is split-adjusted ONLY; yfinance live data is split- AND dividend-adjusted. T2 must NOT mix yfinance live with Upstox historical without correcting for the cumulative dividend offset (or it will detect phantom signals at every large ex-dividend date). This note also lives in the T1.B application log.
 
 _End of report._
