@@ -32,7 +32,10 @@ def fetch_and_store(symbol: str, years: int = DEFAULT_YEARS,
                     source: str | None = None) -> pd.DataFrame:
     """Fetch OHLCV, validate, persist to SQLite, return the cleaned frame."""
     init_db()
-    adapter = _get_adapter(source=source)
+    # Macro indices (^NSEI, ^INDIAVIX) aren't in the Upstox equity instrument
+    # map — always source them from yfinance regardless of the requested source.
+    effective_source = "yfinance" if symbol.startswith("^") else source
+    adapter = _get_adapter(source=effective_source)
     adapter_name = type(adapter).__name__.replace("Adapter", "")
     logger.info("Fetching %s | %s | %d years via %s …",
                 symbol, resolution, years, adapter_name)
