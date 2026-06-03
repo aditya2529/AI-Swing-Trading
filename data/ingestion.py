@@ -41,7 +41,7 @@ def fetch_and_store(symbol: str, years: int = DEFAULT_YEARS,
                 symbol, resolution, years, adapter_name)
 
     raw = adapter.fetch_ohlcv(symbol, years=years, resolution=resolution)
-    cleaned = validate_and_clean(raw, symbol)
+    cleaned = validate_and_clean(raw, symbol, resolution=resolution)
     upsert_ohlcv(cleaned, symbol=symbol, market="NSE", resolution=resolution)
     logger.info("Stored %d bars for %s.", len(cleaned), symbol)
     return cleaned
