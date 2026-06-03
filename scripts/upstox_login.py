@@ -3,26 +3,32 @@
 WHY THIS EXISTS
 ---------------
 Upstox API keys/secrets are permanent, but the ACCESS TOKEN expires every
-day (~03:30 IST). So before each day's backfill you need a new token. This
-script automates the OAuth dance:
+day (~03:30 IST). So before each day's backfill you need a new token.
 
     python scripts/upstox_login.py
 
-It will:
-  1. Read UPSTOX_ENV + the matching UPSTOX_{ENV}_API_KEY / _API_SECRET and
-     UPSTOX_REDIRECT_URI from .env.
-  2. Print a login URL — open it in your browser, log in to Upstox, approve.
-  3. Your browser redirects to the (localhost) redirect URI; it won't load
-     a page, but the address bar will read  ...callback?code=XXXXXXXX.
-     Copy that whole address (or just the code) and paste it back here.
-  4. The script exchanges the code for an access token and writes
-     UPSTOX_{ENV}_ACCESS_TOKEN into .env. (The token value is never printed.)
+HOW IT WORKS (auto mode)
+------------------------
+1. It starts a tiny local web server on the redirect address
+   (http://127.0.0.1:8000/upstox/callback) and opens the Upstox login URL
+   in your browser.
+2. You log in + approve on Upstox.
+3. Upstox redirects back to the local server, which CATCHES the code
+   automatically — no copy/paste. The browser shows "Success, you can
+   close this tab."
+4. The script exchanges the code for an access token and writes
+   UPSTOX_{ENV}_ACCESS_TOKEN into .env (the token value is never printed).
 
-Then run the backfill, e.g.:  python main.py backfill --source upstox
+If the local server can't start (e.g. port 8000 busy), it falls back to
+MANUAL mode: it prints the login URL, you log in, then paste the
+redirected address-bar URL back into the terminal.
 """
 from __future__ import annotations
 
 import sys
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -36,17 +42,16 @@ AUTH_URL = "https://api.upstox.com/v2/login/authorization/dialog"
 TOKEN_URL = "https://api.upstox.com/v2/login/authorization/token"
 
 
-def _fail(msg: str) -> "NoReturn":  # type: ignore[name-defined]
+def _fail(msg: str):
     print(f"\n[ERROR] {msg}")
     sys.exit(1)
 
 
 def _extract_code(raw: str) -> str:
-    """Accept either a bare code or the full redirected URL."""
     raw = raw.strip()
     if "code=" in raw:
         qs = parse_qs(urlparse(raw).query)
-        if "code" in qs and qs["code"]:
+        if qs.get("code"):
             return qs["code"][0]
     return raw
 
@@ -66,6 +71,65 @@ def _set_env_var(key: str, value: str) -> None:
     ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
+# ── auto mode: a one-shot local server that catches the ?code= redirect ──
+
+class _CallbackHandler(BaseHTTPRequestHandler):
+    captured_code: str | None = None
+
+    def do_GET(self):  # noqa: N802
+        qs = parse_qs(urlparse(self.path).query)
+        code = qs.get("code", [None])[0]
+        if code:
+            _CallbackHandler.captured_code = code
+            body = (b"<html><body style='font-family:sans-serif'>"
+                    b"<h2>Success.</h2><p>Token captured. You can close this "
+                    b"tab and return to the terminal.</p></body></html>")
+        else:
+            body = (b"<html><body><h2>Waiting for Upstox redirect...</h2>"
+                    b"</body></html>")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):  # silence default request logging
+        pass
+
+
+def _get_code_auto(login_url: str, host: str, port: int) -> str | None:
+    """Start the local callback server, open the browser, wait for the code.
+    Returns the code, or None if the server couldn't bind (caller falls back)."""
+    try:
+        server = HTTPServer((host, port), _CallbackHandler)
+    except OSError:
+        return None
+    server.timeout = 1.0  # handle_request returns each second so we can re-check
+    print(f"\nLocal callback server listening on http://{host}:{port}")
+    print("\nOpening the Upstox login in your browser. If it doesn't open, "
+          "paste this URL into your browser manually:\n")
+    print(f"   {login_url}\n")
+    try:
+        webbrowser.open(login_url)
+    except Exception:
+        pass
+    print("Waiting for you to log in + approve in the browser "
+          "(up to 5 minutes) ...")
+    deadline = time.monotonic() + 300
+    while _CallbackHandler.captured_code is None and time.monotonic() < deadline:
+        server.handle_request()  # blocks up to server.timeout, then re-checks
+    server.server_close()
+    return _CallbackHandler.captured_code
+
+
+def _get_code_manual(login_url: str) -> str:
+    print("\n[manual mode] Open this URL, log in, and approve:\n")
+    print(f"   {login_url}\n")
+    print("Your browser redirects to a localhost page that won't load — copy "
+          "that address-bar URL (it has ?code=...).\n")
+    pasted = input("Paste the redirected URL (or just the code) here: ").strip()
+    return _extract_code(pasted)
+
+
 def main() -> int:
     if not ENV_PATH.exists():
         _fail(f"No .env at {ENV_PATH}. Copy .env.example to .env first.")
@@ -82,20 +146,22 @@ def main() -> int:
         _fail(f"Missing UPSTOX_{mode.upper()}_API_KEY / _API_SECRET / "
               f"UPSTOX_REDIRECT_URI in .env.")
 
+    parsed = urlparse(redirect)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8000
+
     login = (f"{AUTH_URL}?response_type=code&client_id={api_key}"
              f"&redirect_uri={redirect}")
-    print(f"\nUpstox env: {mode}")
-    print("\n1) Open this URL in your browser, log in, and approve:\n")
-    print(f"   {login}\n")
-    print("2) Your browser will redirect to the localhost URI (it won't load "
-          "a page —\n   that's fine). Copy the address-bar URL (it contains "
-          "?code=...).\n")
+    print(f"Upstox env: {mode}")
 
-    pasted = input("3) Paste the redirected URL (or just the code) here: ").strip()
-    code = _extract_code(pasted)
+    code = _get_code_auto(login, host, port)
     if not code:
-        _fail("Could not read an authorization code from that input.")
+        print("\n(Could not auto-capture — switching to manual paste.)")
+        code = _get_code_manual(login)
+    if not code:
+        _fail("No authorization code received. Re-run and try again.")
 
+    print("\nExchanging the code for an access token ...")
     resp = requests.post(
         TOKEN_URL,
         headers={"accept": "application/json",
