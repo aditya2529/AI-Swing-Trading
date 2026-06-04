@@ -52,6 +52,17 @@ VOLUME_AVG_WINDOW = 20        # window for average-volume baseline
 VOLUME_MULT = 1.5            # breakout-day volume must exceed 1.5× the 20-day avg
 REGIME_MA = 50               # long only when NIFTY 50 > its own 50-day MA
 
+# ── Mean-reversion entry rules (MR-1 baseline) ──────────────────────────
+# "Buy the oversold dip in an uptrend." The market-regime gate (NIFTY >
+# 50DMA) is deliberately OMITTED from this baseline — see the module
+# docstring in signals/mean_reversion.py for the rationale and the
+# correlated knife-catch risk that MR-2's max-DD will measure.
+MR_TREND_MA = 200            # only dip-buy names whose close > 200DMA
+MR_RSI_PERIOD = 14           # standard RSI window
+MR_RSI_OVERSOLD = 30         # trigger oversold at RSI < this
+MR_RSI_EXIT = 55             # exit when bounce takes RSI > this
+MR_MAX_HOLD_DAYS = 10        # time stop (mean-reversion holds are short)
+
 # ── Risk & exits (§2b, LAW 6 — sacred, change only with sign-off) ───────
 ATR_PERIOD = 14
 ATR_SL_MULTIPLIER = 2.0       # initial hard stop = entry − 2× ATR (spec: 1.5–2×)
