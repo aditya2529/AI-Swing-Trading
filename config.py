@@ -63,6 +63,16 @@ MR_RSI_OVERSOLD = 30         # trigger oversold at RSI < this
 MR_RSI_EXIT = 55             # exit when bounce takes RSI > this
 MR_MAX_HOLD_DAYS = 10        # time stop (mean-reversion holds are short)
 
+# ── Cross-sectional momentum (MOM-2 baseline) ───────────────────────────
+# Classic Jegadeesh-Titman 12-1 formulation: rank by total return over
+# the past ~12 months ENDING ~1 month ago. The skip month defends against
+# short-term reversal contamination. Top-N rotation, monthly rebalance.
+# These come from the academic literature, are NOT tuned to our data, and
+# stay frozen across MOM-2 / MOM-3 (LAW 9: no fit-to-history tuning).
+MOM_LOOKBACK_DAYS = 252       # ~12 trading months (the "12" in 12-1)
+MOM_SKIP_DAYS = 21            # ~1 trading month (the "1" in 12-1)
+MOM_TOP_N = 15                # hold top 15 by rank; harness caps apply
+
 # ── Risk & exits (§2b, LAW 6 — sacred, change only with sign-off) ───────
 ATR_PERIOD = 14
 ATR_SL_MULTIPLIER = 2.0       # initial hard stop = entry − 2× ATR (spec: 1.5–2×)
