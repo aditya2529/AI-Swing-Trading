@@ -384,3 +384,166 @@ def test_macro_index_symbols_never_traded():
     syms = {o.symbol for o in orders}
     assert "^NSEI" not in syms, (
         f"Macro index appeared in orders: {syms}")
+
+
+# ── 8. MOM-4 absolute-momentum filter (Antonacci dual-momentum) ────────
+
+
+def test_absolute_filter_drops_negative_score_names():
+    """Filter ON: names whose own 12-1 score is non-positive get dropped
+    from the top-N even if they ranked into it. Mixed-sign universe -
+    only the positive-score names should be ordered.
+
+    Build A (+0.50), B (+0.20), C (-0.10), D (-0.30). With top_n=4:
+      filter OFF: all four ordered (top-4 by RELATIVE rank).
+      filter ON : only A and B ordered (top_set filtered to >0).
+    """
+    n = 320
+    # Strong winners + clear losers. Linear trends produce 12-1 scores
+    # closely matching the end-return; we keep margins wide so the test
+    # isn't sensitive to the exact skip-window arithmetic.
+    data = {
+        "A": _linear_trend(0.50, n=n),
+        "B": _linear_trend(0.20, n=n),
+        "C": _linear_trend(-0.10, n=n),
+        "D": _linear_trend(-0.30, n=n),
+    }
+    cutoff = _rebalance_day_cutoff(data)
+    view = BarView(data, cutoff=cutoff)
+
+    baseline = MomentumStrategy(top_n=4)
+    baseline_orders = baseline.decide(view, _empty_book())
+    baseline_syms = {o.symbol for o in baseline_orders if isinstance(o, EnterOrder)}
+    assert baseline_syms == {"A", "B", "C", "D"}, (
+        f"baseline (filter OFF) should order all 4 by relative rank, "
+        f"got: {baseline_syms}")
+
+    filtered = MomentumStrategy(top_n=4, use_absolute_filter=True)
+    filtered_orders = filtered.decide(view, _empty_book())
+    filtered_syms = {o.symbol for o in filtered_orders if isinstance(o, EnterOrder)}
+    assert filtered_syms == {"A", "B"}, (
+        f"filter ON should drop negative-score names C and D, got: "
+        f"{filtered_syms}")
+
+
+def test_absolute_filter_all_negative_universe_orders_zero_enters():
+    """In a universe-wide downturn where EVERY symbol has negative
+    absolute momentum, the dual-momentum strategy must propose ZERO
+    entries (fully cash). This is the crash-avoidance behaviour the
+    filter exists to deliver."""
+    n = 320
+    data = {
+        "A": _linear_trend(-0.10, n=n),
+        "B": _linear_trend(-0.20, n=n),
+        "C": _linear_trend(-0.30, n=n),
+    }
+    cutoff = _rebalance_day_cutoff(data)
+    view = BarView(data, cutoff=cutoff)
+
+    filtered = MomentumStrategy(top_n=3, use_absolute_filter=True)
+    orders = filtered.decide(view, _empty_book())
+    enters = [o for o in orders if isinstance(o, EnterOrder)]
+    assert enters == [], (
+        f"all-negative universe should produce zero EnterOrders with "
+        f"filter ON, got: {[o.symbol for o in enters]}")
+
+
+def test_absolute_filter_all_negative_exits_held_positions_to_cash():
+    """A book holding names that have all turned negative MUST be
+    rotated out to cash on the next rebalance day with filter ON.
+    The mechanism reuses the existing rotation_out exit path -- no new
+    exit semantics. This is what 'falls cleanly to cash' means."""
+    from backtesting.replay import Position
+    n = 320
+    data = {
+        "A": _linear_trend(-0.10, n=n),
+        "B": _linear_trend(-0.20, n=n),
+        "C": _linear_trend(-0.30, n=n),
+    }
+    cutoff = _rebalance_day_cutoff(data)
+    positions = {
+        s: Position(symbol=s, entry_date=cutoff,
+                    entry_price=100.0, shares=10, stop=90.0,
+                    risk_per_share=10.0, cost_basis=1000.0)
+        for s in ("A", "B")
+    }
+    book = Book(cash=400_000.0, equity=500_000.0, positions=positions)
+
+    view = BarView(data, cutoff=cutoff)
+    filtered = MomentumStrategy(top_n=3, use_absolute_filter=True)
+    orders = filtered.decide(view, book)
+
+    exit_syms = {o.symbol for o in orders if isinstance(o, ExitOrder)}
+    enter_syms = {o.symbol for o in orders if isinstance(o, EnterOrder)}
+    assert exit_syms == {"A", "B"}, (
+        f"all held names should be rotated out with filter ON in an "
+        f"all-negative universe, got exits: {exit_syms}")
+    assert enter_syms == set(), (
+        f"no entries should be proposed when filter rejects everything, "
+        f"got enters: {enter_syms}")
+
+
+def test_filter_off_reproduces_mom2_baseline_exactly():
+    """Default (filter OFF) MUST produce identical orders to an explicit
+    ``use_absolute_filter=False``. This pins the default-behaviour
+    contract: MOM-4 cannot accidentally change MOM-2 semantics.
+    Tested across a mixed universe where the filter WOULD make a
+    difference if it were on -- so any drift between default and
+    explicit-OFF would be visible."""
+    n = 320
+    data = {
+        "A": _linear_trend(0.50, n=n),
+        "B": _linear_trend(0.10, n=n),
+        "C": _linear_trend(-0.10, n=n),
+        "D": _linear_trend(-0.40, n=n),
+    }
+    cutoff = _rebalance_day_cutoff(data)
+    view = BarView(data, cutoff=cutoff)
+
+    s_default = MomentumStrategy(top_n=4)              # default
+    s_explicit_off = MomentumStrategy(top_n=4,
+                                       use_absolute_filter=False)
+    orders_default = s_default.decide(view, _empty_book())
+    orders_off = s_explicit_off.decide(view, _empty_book())
+
+    # Stable comparison: serialise by (kind, symbol).
+    def _ser(orders):
+        return sorted(
+            (("E" if isinstance(o, EnterOrder) else "X", o.symbol)
+              for o in orders))
+
+    assert _ser(orders_default) == _ser(orders_off), (
+        f"default and explicit-OFF diverged. default={_ser(orders_default)} "
+        f"explicit_off={_ser(orders_off)}")
+
+
+def test_no_leak_end_to_end_with_filter_on():
+    """Look-ahead regression -- with filter ON. Mutating bars beyond the
+    cut must not change any decision <= cut. The filter inspects
+    ``scores[s]`` which is derived from causal slices only, so the
+    invariance should hold; this test catches accidental drift."""
+    n = 330
+    data = {
+        "A": _linear_trend(0.45, n=n),
+        "B": _linear_trend(0.20, n=n),
+        "C": _linear_trend(-0.05, n=n),  # boundary candidate
+    }
+    cut_idx = 290
+    cut = list(data["A"].index)[cut_idx]
+
+    s1 = MomentumStrategy(top_n=3, use_absolute_filter=True)
+    base = run_replay(copy.deepcopy(data), s1, record_decisions=True)
+
+    mutated = copy.deepcopy(data)
+    for sym, df in mutated.items():
+        mask = df.index > cut
+        df.loc[mask, ["open", "high", "low", "close"]] *= 4.0
+
+    s2 = MomentumStrategy(top_n=3, use_absolute_filter=True)
+    after = run_replay(mutated, s2, record_decisions=True)
+
+    base_le_cut = [d for d in base["decisions"] if d[0] <= cut]
+    after_le_cut = [d for d in after["decisions"] if d[0] <= cut]
+    assert base_le_cut == after_le_cut, (
+        "Decisions on days <= cut diverged when future bars were mutated "
+        "with the absolute filter ON.")

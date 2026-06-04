@@ -122,11 +122,30 @@ class MomentumStrategy:
     the causal data alone. This means the SAME strategy instance can
     be reused across replays without leaking state, and the
     look-ahead regression suite is naturally safe.
+
+    MOM-4 — the ``use_absolute_filter`` toggle (Antonacci dual momentum)
+    -------------------------------------------------------------------
+    When ``True``, after selecting the top-N by RELATIVE momentum the
+    strategy DROPS any name whose own 12-1 score is non-positive. The
+    threshold is exactly 0 — pre-registered, parameter-free, NOT
+    optimized against any window. Effect: in a broad downturn where
+    EVERY name has negative absolute momentum, the strategy holds zero
+    positions (fully in cash) until the broad regime turns up. This is
+    the classic Antonacci dual-momentum filter: relative rank + absolute
+    filter. Held positions whose own score has fallen below zero are
+    rotated out the same way they would be rotated out for falling out
+    of the top-N (``reason='rotation_out'``).
+
+    The default is False — the MOM-2 baseline behavior — so every
+    existing test that constructed ``MomentumStrategy()`` keeps its
+    semantics. Pass ``use_absolute_filter=True`` to evaluate the
+    dual-momentum variant (the MOM-4 A/B backtest does this).
     """
     lookback_days: int = MOM_LOOKBACK_DAYS
     skip_days: int = MOM_SKIP_DAYS
     top_n: int = MOM_TOP_N
     atr_period: int = ATR_PERIOD
+    use_absolute_filter: bool = False
 
     # ── decide ──────────────────────────────────────────────────────────
 
@@ -156,6 +175,18 @@ class MomentumStrategy:
         ranked_symbols = sorted(scores, key=lambda s: scores[s], reverse=True)
         top_set = set(ranked_symbols[:self.top_n])
 
+        # Antonacci dual-momentum absolute filter (MOM-4). Threshold = 0
+        # exactly: keep only names whose own 12-month-skip-1 return is
+        # strictly positive. Parameter-free, pre-registered, NOT tuned.
+        # In a universe-wide downturn every name may fail, in which case
+        # ``top_set`` becomes empty and the strategy holds zero positions
+        # (all currently-held names will be rotated out for no longer
+        # being in ``top_set``, falling cleanly to cash). The default
+        # (``use_absolute_filter=False``) preserves the MOM-2 baseline
+        # bit-for-bit.
+        if self.use_absolute_filter:
+            top_set = {s for s in top_set if scores[s] > 0}
+
         orders: list = []
 
         # Exits FIRST — names that fell out of the top-N (or lost
@@ -176,8 +207,15 @@ class MomentumStrategy:
         # in rank order; the harness's MAX_POSITIONS / MAX_PER_SECTOR /
         # MAX_PORTFOLIO_HEAT caps then trim the actual fills. We don't
         # second-guess the cap here — the harness is the single source
-        # of truth for portfolio risk constraints (LAW 6).
+        # of truth for portfolio risk constraints (LAW 6). When the
+        # MOM-4 absolute filter is on, ``top_set`` may be a strict
+        # subset of ``ranked_symbols[:top_n]`` (or empty entirely); we
+        # iterate the rank-ordered prefix and skip anything the filter
+        # removed, which preserves rank ordering for the harness cap
+        # while honouring the filter.
         for sym in ranked_symbols[:self.top_n]:
+            if sym not in top_set:
+                continue
             if book.has_position(sym):
                 continue
             enter_order = self._maybe_enter(view, sym)
