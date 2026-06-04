@@ -77,9 +77,177 @@ SURVIVORSHIP_NOTE = (
 )
 
 
+# ── MOMENTUM_UNIVERSE — broader NSE set for cross-sectional rotation ────
+#
+# Used by signals/momentum.py (MOM-2). Drawn from current NIFTY 200-ish
+# liquid names; SEPARATE from POINT_IN_TIME_NSE25 (it is a SUPERSET — the
+# 25 swing names are included so a single backfill plan covers both
+# strategies' needs, but the swing strategy still iterates only
+# POINT_IN_TIME_NSE25). All tickers in .NS form for yfinance.
+#
+# IMPORTANT survivorship caveat for MOM (different from swing's caveat):
+# this list is CURRENT membership, not point-in-time. Names that were in
+# NIFTY 200 a decade ago but have since been delisted / merged out are
+# entirely absent. Therefore MOM-3's backtest must apply an explicit
+# survivorship discount (10-30% PF haircut typical for current-membership
+# universes); see ``MOMENTUM_SURVIVORSHIP_NOTE`` below. A true PIT
+# universe is a later upgrade.
+MOMENTUM_UNIVERSE: list[str] = sorted({
+    # IT (10)
+    "TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS",
+    "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS", "MPHASIS.NS", "KPITTECH.NS",
+    # Banks (12)
+    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
+    "INDUSINDBK.NS", "BANKBARODA.NS", "PNB.NS", "FEDERALBNK.NS",
+    "IDFCFIRSTB.NS", "AUBANK.NS", "YESBANK.NS",
+    # Financial services / NBFC / insurance (14)
+    "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "HDFCLIFE.NS",
+    "ICICIGI.NS", "ICICIPRULI.NS", "SBICARD.NS", "CHOLAFIN.NS",
+    "MUTHOOTFIN.NS", "MFSL.NS", "MANAPPURAM.NS", "LICI.NS",
+    "RECLTD.NS", "PFC.NS",
+    # Energy / oil & gas (10)
+    "RELIANCE.NS", "ONGC.NS", "BPCL.NS", "IOC.NS", "HINDPETRO.NS",
+    "GAIL.NS", "OIL.NS", "PETRONET.NS", "IGL.NS", "MGL.NS",
+    # Auto + ancillaries (11)
+    "MARUTI.NS", "TATAMOTORS.NS", "M&M.NS", "BAJAJ-AUTO.NS",
+    "HEROMOTOCO.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "TVSMOTOR.NS",
+    "BHARATFORG.NS", "BOSCHLTD.NS", "MOTHERSON.NS",
+    # FMCG (10)
+    "HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "BRITANNIA.NS",
+    "DABUR.NS", "MARICO.NS", "COLPAL.NS", "GODREJCP.NS",
+    "TATACONSUM.NS", "VBL.NS",
+    # Pharma + healthcare services (15)
+    "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "LUPIN.NS", "AUROPHARMA.NS",
+    "BIOCON.NS", "DIVISLAB.NS", "TORNTPHARM.NS", "ZYDUSLIFE.NS",
+    "ALKEM.NS", "GLENMARK.NS", "APOLLOHOSP.NS", "FORTIS.NS",
+    "MAXHEALTH.NS", "METROPOLIS.NS",
+    # Metals (8)
+    "TATASTEEL.NS", "HINDALCO.NS", "VEDL.NS", "JSWSTEEL.NS",
+    "COALINDIA.NS", "NMDC.NS", "JINDALSTEL.NS", "SAIL.NS",
+    # Cement (6)
+    "ULTRACEMCO.NS", "SHREECEM.NS", "GRASIM.NS", "ACC.NS",
+    "AMBUJACEM.NS", "RAMCOCEM.NS",
+    # Telecom (2)
+    "BHARTIARTL.NS", "IDEA.NS",
+    # Infra / capital goods (10)
+    "LT.NS", "SIEMENS.NS", "ABB.NS", "HAVELLS.NS", "CGPOWER.NS",
+    "GMRINFRA.NS", "IRB.NS", "ADANIENT.NS", "ADANIPORTS.NS", "BHEL.NS",
+    # Power / utilities (8)
+    "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "ADANIPOWER.NS",
+    "ADANIGREEN.NS", "JSWENERGY.NS", "NHPC.NS", "SJVN.NS",
+    # Realty (4)
+    "DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS",
+    # Chemicals / paints (8)
+    "PIDILITIND.NS", "UPL.NS", "BERGEPAINT.NS", "ASIANPAINT.NS",
+    "AKZOINDIA.NS", "SRF.NS", "TATACHEM.NS", "DEEPAKNTR.NS",
+    # Retail / consumer-durables (5)
+    "TITAN.NS", "DMART.NS", "BATAINDIA.NS", "PAGEIND.NS", "TRENT.NS",
+    # Media (2)
+    "ZEEL.NS", "SUNTV.NS",
+    # Defense (3)
+    "HAL.NS", "BEL.NS", "BHARATFORG.NS",   # BHARATFORG dual-listed in auto+defense
+})
+
+# Sector tags for the MOM-only names (extending SECTORS with new entries
+# so run_replay's per-sector cap remains meaningful for momentum holdings).
+# Names already in SECTORS (the 25 swing set) are NOT re-added.
+_MOMENTUM_NEW_SECTORS: dict[str, str] = {
+    # IT
+    "HCLTECH.NS": "IT", "TECHM.NS": "IT", "LTIM.NS": "IT",
+    "PERSISTENT.NS": "IT", "COFORGE.NS": "IT", "MPHASIS.NS": "IT",
+    "KPITTECH.NS": "IT",
+    # Banks
+    "KOTAKBANK.NS": "BANK", "INDUSINDBK.NS": "BANK", "BANKBARODA.NS": "BANK",
+    "PNB.NS": "BANK", "FEDERALBNK.NS": "BANK", "IDFCFIRSTB.NS": "BANK",
+    "AUBANK.NS": "BANK",
+    # Financial
+    "BAJFINANCE.NS": "FINANCIAL", "BAJAJFINSV.NS": "FINANCIAL",
+    "SBILIFE.NS": "FINANCIAL", "HDFCLIFE.NS": "FINANCIAL",
+    "ICICIGI.NS": "FINANCIAL", "ICICIPRULI.NS": "FINANCIAL",
+    "SBICARD.NS": "FINANCIAL", "CHOLAFIN.NS": "FINANCIAL",
+    "MUTHOOTFIN.NS": "FINANCIAL", "MFSL.NS": "FINANCIAL",
+    "MANAPPURAM.NS": "FINANCIAL", "LICI.NS": "FINANCIAL",
+    "RECLTD.NS": "FINANCIAL", "PFC.NS": "FINANCIAL",
+    # Energy
+    "IOC.NS": "ENERGY", "HINDPETRO.NS": "ENERGY", "OIL.NS": "ENERGY",
+    "PETRONET.NS": "ENERGY", "IGL.NS": "ENERGY", "MGL.NS": "ENERGY",
+    # Auto
+    "BAJAJ-AUTO.NS": "AUTO", "HEROMOTOCO.NS": "AUTO", "EICHERMOT.NS": "AUTO",
+    "ASHOKLEY.NS": "AUTO", "TVSMOTOR.NS": "AUTO", "BHARATFORG.NS": "AUTO",
+    "BOSCHLTD.NS": "AUTO", "MOTHERSON.NS": "AUTO",
+    # FMCG
+    "NESTLEIND.NS": "FMCG", "BRITANNIA.NS": "FMCG", "DABUR.NS": "FMCG",
+    "MARICO.NS": "FMCG", "COLPAL.NS": "FMCG", "GODREJCP.NS": "FMCG",
+    "TATACONSUM.NS": "FMCG", "VBL.NS": "FMCG",
+    # Pharma / healthcare
+    "DRREDDY.NS": "PHARMA", "AUROPHARMA.NS": "PHARMA", "BIOCON.NS": "PHARMA",
+    "DIVISLAB.NS": "PHARMA", "TORNTPHARM.NS": "PHARMA",
+    "ZYDUSLIFE.NS": "PHARMA", "ALKEM.NS": "PHARMA", "GLENMARK.NS": "PHARMA",
+    "APOLLOHOSP.NS": "HEALTHCARE", "FORTIS.NS": "HEALTHCARE",
+    "MAXHEALTH.NS": "HEALTHCARE", "METROPOLIS.NS": "HEALTHCARE",
+    # Metal
+    "JSWSTEEL.NS": "METAL", "COALINDIA.NS": "METAL", "NMDC.NS": "METAL",
+    "JINDALSTEL.NS": "METAL", "SAIL.NS": "METAL",
+    # Cement
+    "ULTRACEMCO.NS": "CEMENT", "SHREECEM.NS": "CEMENT", "GRASIM.NS": "CEMENT",
+    "ACC.NS": "CEMENT", "AMBUJACEM.NS": "CEMENT", "RAMCOCEM.NS": "CEMENT",
+    # Telecom
+    "IDEA.NS": "TELECOM",
+    # Infra / capital goods
+    "SIEMENS.NS": "INFRA", "ABB.NS": "INFRA", "HAVELLS.NS": "INFRA",
+    "CGPOWER.NS": "INFRA", "GMRINFRA.NS": "INFRA", "IRB.NS": "INFRA",
+    "ADANIENT.NS": "INFRA", "ADANIPORTS.NS": "INFRA", "BHEL.NS": "INFRA",
+    # Power / utilities
+    "NTPC.NS": "POWER", "POWERGRID.NS": "POWER", "TATAPOWER.NS": "POWER",
+    "ADANIPOWER.NS": "POWER", "ADANIGREEN.NS": "POWER",
+    "JSWENERGY.NS": "POWER", "NHPC.NS": "POWER", "SJVN.NS": "POWER",
+    # Realty
+    "DLF.NS": "REALTY", "GODREJPROP.NS": "REALTY", "OBEROIRLTY.NS": "REALTY",
+    "PRESTIGE.NS": "REALTY",
+    # Chemicals / paints
+    "PIDILITIND.NS": "CHEMICAL", "UPL.NS": "CHEMICAL",
+    "BERGEPAINT.NS": "CHEMICAL", "ASIANPAINT.NS": "CHEMICAL",
+    "AKZOINDIA.NS": "CHEMICAL", "SRF.NS": "CHEMICAL",
+    "TATACHEM.NS": "CHEMICAL", "DEEPAKNTR.NS": "CHEMICAL",
+    # Retail / consumer durables
+    "TITAN.NS": "RETAIL", "DMART.NS": "RETAIL", "BATAINDIA.NS": "RETAIL",
+    "PAGEIND.NS": "RETAIL", "TRENT.NS": "RETAIL",
+    # Media
+    "ZEEL.NS": "MEDIA", "SUNTV.NS": "MEDIA",
+    # Defense
+    "HAL.NS": "DEFENSE", "BEL.NS": "DEFENSE",
+}
+# Merge into the canonical SECTORS dict so ``get_sector`` returns the
+# right bucket for momentum-only names without the swing code seeing
+# anything new (swing iterates POINT_IN_TIME_NSE25 explicitly).
+SECTORS.update(_MOMENTUM_NEW_SECTORS)
+
+# Names that are in MOMENTUM_UNIVERSE but NOT yet in market_data.db.
+# Used by the backfill script to know which symbols to fetch.
+# (Computed at import time; the swing 25 + ^NSEI/^INDIAVIX already there
+# are excluded so we don't waste yfinance calls re-fetching.)
+MOMENTUM_NEW_TO_DB: list[str] = sorted(
+    set(MOMENTUM_UNIVERSE) - set(POINT_IN_TIME_NSE25)
+)
+
+MOMENTUM_SURVIVORSHIP_NOTE = (
+    "MOMENTUM_UNIVERSE is CURRENT membership, not point-in-time. Names "
+    "that were in NIFTY 200 a decade ago but have since been delisted / "
+    "merged out are entirely absent. MOM-3's backtest report MUST apply "
+    "an explicit survivorship discount (10-30% PF haircut typical for "
+    "current-membership universes) and label results accordingly. True "
+    "PIT membership rotation is a separate later upgrade."
+)
+
+
 def get_universe() -> list[str]:
     """The tradeable symbols (excludes macro indices, which live in config)."""
     return list(POINT_IN_TIME_NSE25)
+
+
+def get_momentum_universe() -> list[str]:
+    """The broader symbol set used by signals/momentum.py."""
+    return list(MOMENTUM_UNIVERSE)
 
 
 def get_sector(symbol: str) -> str:
