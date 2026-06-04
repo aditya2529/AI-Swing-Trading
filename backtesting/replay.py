@@ -148,6 +148,7 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                max_positions: int = MAX_POSITIONS,
                max_per_sector: int = MAX_PER_SECTOR,
                max_heat: float = MAX_PORTFOLIO_HEAT,
+               dd_cap_pct: float | None = None,
                close_at_end: bool = True,
                record_decisions: bool = False) -> dict:
     """Replay ``strategy`` over per-symbol daily ``data``.
@@ -162,6 +163,19 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
         start, end: optional inclusive bounds on the decision timeline.
         risk_pct, max_positions, max_per_sector, max_heat: portfolio risk
             controls (LAW 6).
+        dd_cap_pct: portfolio-level drawdown circuit-breaker. ``None``
+            (default) disables the cap and reproduces prior behaviour
+            byte-for-byte (regression-safe). Otherwise, on each day-T
+            open AFTER any exit fills, equity = cash + MTM-at-open is
+            compared against ``peak_equity × (1 - dd_cap_pct)``. If the
+            threshold is breached, that day's pending NEW ENTRIES are
+            dropped (the strategy's order list for those is discarded;
+            no shares purchased, no cash spent). Exits ALWAYS process.
+            The cap re-arms symmetrically — once equity-at-open rises
+            back above the threshold, entries resume. ``peak_equity``
+            is the running max of the close-MTM equity series the
+            harness already computes, so the comparison uses only
+            information knowable at day-T open (causal — no look-ahead).
         close_at_end: force-close open positions at the final bar's close
             so end-of-data positions become realised trades.
         record_decisions: also return the per-day decision log (used by the
@@ -186,6 +200,12 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
     equity_rows: list = []
     decisions_log: list = []
     pending: list = []   # orders decided yesterday, to fill at today's open
+    # Running peak of the close-MTM equity series. Used only by the
+    # ``dd_cap_pct`` halt check; updated after each day's close MTM step.
+    # Seeded at ``initial_capital`` so the very first day has a baseline
+    # peak to compare against (cap can never trigger on day 1 because
+    # equity-at-open == initial_capital == peak).
+    peak_equity = float(initial_capital)
 
     def _price(sym, t, col):
         df = data.get(sym)
@@ -224,6 +244,23 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                 "bars_held": pos.bars_held, "exit_reason": o.reason,
             })
             del positions[o.symbol]
+
+        # ── DD-cap halt check (entries only; exits are unaffected) ──
+        # Causal: cash reflects today's exit proceeds; MTM uses today's
+        # open prices. Both are known at the day-T entry-fill moment.
+        # ``peak_equity`` is the running max through yesterday's close
+        # (today's close hasn't happened yet). When breached, drop today's
+        # entries — the symmetric re-arm is implicit: tomorrow we check
+        # again, and entries resume the moment equity-at-open exceeds the
+        # threshold.
+        if dd_cap_pct is not None and enters:
+            mtm_at_open = sum(
+                p.shares * (_price(s, t, "open") or p.entry_price)
+                for s, p in positions.items())
+            equity_at_open = cash + mtm_at_open
+            threshold = peak_equity * (1.0 - dd_cap_pct)
+            if equity_at_open <= threshold:
+                enters = []   # halted — new exposure blocked today
 
         for o in enters:
             if o.symbol in positions:
@@ -279,6 +316,11 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                 p.highest_high = max(p.highest_high, hi)
         equity = cash + mtm
         equity_rows.append((t, equity))
+        # Update the running peak for tomorrow's DD-cap check. Always
+        # tracked regardless of ``dd_cap_pct`` — cheap, and keeps the
+        # default-off path byte-equivalent (the peak just isn't consulted).
+        if equity > peak_equity:
+            peak_equity = equity
 
         # 3) Decision at today's close on a strictly-causal view.
         view = BarView(data, cutoff=t)
