@@ -93,9 +93,10 @@ SURVIVORSHIP_NOTE = (
 # universes); see ``MOMENTUM_SURVIVORSHIP_NOTE`` below. A true PIT
 # universe is a later upgrade.
 MOMENTUM_UNIVERSE: list[str] = sorted({
-    # IT (10)
+    # IT (9; LTIM.NS removed — LTI/Mindtree merger left the legacy ticker
+    # un-fetchable on yfinance and the corrected LTIMINDTREE.NS also 404s.)
     "TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS",
-    "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS", "MPHASIS.NS", "KPITTECH.NS",
+    "PERSISTENT.NS", "COFORGE.NS", "MPHASIS.NS", "KPITTECH.NS",
     # Banks (12)
     "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
     "INDUSINDBK.NS", "BANKBARODA.NS", "PNB.NS", "FEDERALBNK.NS",
@@ -129,9 +130,10 @@ MOMENTUM_UNIVERSE: list[str] = sorted({
     "AMBUJACEM.NS", "RAMCOCEM.NS",
     # Telecom (2)
     "BHARTIARTL.NS", "IDEA.NS",
-    # Infra / capital goods (10)
+    # Infra / capital goods (10; GMRINFRA.NS replaced by GMRAIRPORT.NS
+    # post-2024 demerger — the legacy parent ticker no longer fetches.)
     "LT.NS", "SIEMENS.NS", "ABB.NS", "HAVELLS.NS", "CGPOWER.NS",
-    "GMRINFRA.NS", "IRB.NS", "ADANIENT.NS", "ADANIPORTS.NS", "BHEL.NS",
+    "GMRAIRPORT.NS", "IRB.NS", "ADANIENT.NS", "ADANIPORTS.NS", "BHEL.NS",
     # Power / utilities (8)
     "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "ADANIPOWER.NS",
     "ADANIGREEN.NS", "JSWENERGY.NS", "NHPC.NS", "SJVN.NS",
@@ -153,7 +155,7 @@ MOMENTUM_UNIVERSE: list[str] = sorted({
 # Names already in SECTORS (the 25 swing set) are NOT re-added.
 _MOMENTUM_NEW_SECTORS: dict[str, str] = {
     # IT
-    "HCLTECH.NS": "IT", "TECHM.NS": "IT", "LTIM.NS": "IT",
+    "HCLTECH.NS": "IT", "TECHM.NS": "IT",
     "PERSISTENT.NS": "IT", "COFORGE.NS": "IT", "MPHASIS.NS": "IT",
     "KPITTECH.NS": "IT",
     # Banks
@@ -195,7 +197,7 @@ _MOMENTUM_NEW_SECTORS: dict[str, str] = {
     "IDEA.NS": "TELECOM",
     # Infra / capital goods
     "SIEMENS.NS": "INFRA", "ABB.NS": "INFRA", "HAVELLS.NS": "INFRA",
-    "CGPOWER.NS": "INFRA", "GMRINFRA.NS": "INFRA", "IRB.NS": "INFRA",
+    "CGPOWER.NS": "INFRA", "GMRAIRPORT.NS": "INFRA", "IRB.NS": "INFRA",
     "ADANIENT.NS": "INFRA", "ADANIPORTS.NS": "INFRA", "BHEL.NS": "INFRA",
     # Power / utilities
     "NTPC.NS": "POWER", "POWERGRID.NS": "POWER", "TATAPOWER.NS": "POWER",
@@ -229,6 +231,22 @@ SECTORS.update(_MOMENTUM_NEW_SECTORS)
 MOMENTUM_NEW_TO_DB: list[str] = sorted(
     set(MOMENTUM_UNIVERSE) - set(POINT_IN_TIME_NSE25)
 )
+
+# Symbols intentionally removed from MOMENTUM_UNIVERSE after the MOM-1
+# backfill could not source them on yfinance. Kept here so reviewers can
+# reproduce the gap. These are NOT looked up at runtime — pure provenance.
+MOMENTUM_DROPPED_DEAD_TICKERS: dict[str, str] = {
+    "LTIM.NS": (
+        "LTI/Mindtree merger (Nov 2022); the surviving entity LTIMINDTREE.NS "
+        "also returns 404 on yfinance as of 2026-06-04. No replacement found."
+    ),
+    "GMRINFRA.NS": (
+        "GMR group 2024 demerger split the parent into GMRP&UI / GMRAIRPORT; "
+        "replaced in MOMENTUM_UNIVERSE by GMRAIRPORT.NS (the listed successor "
+        "that fetches cleanly)."
+    ),
+}
+
 
 MOMENTUM_SURVIVORSHIP_NOTE = (
     "MOMENTUM_UNIVERSE is CURRENT membership, not point-in-time. Names "
