@@ -258,6 +258,236 @@ MOMENTUM_SURVIVORSHIP_NOTE = (
 )
 
 
+# ── SMID_UNIVERSE — small/mid-cap momentum universe (SMOM-1) ────────────
+#
+# A separate ~200-name pool drawn from CURRENT NIFTY Midcap-150 and
+# NIFTY Smallcap-250 membership (liquid subset). Used by
+# signals/smid_momentum.py (SMOM-2). MOMENTUM_UNIVERSE stays intact;
+# SMID_UNIVERSE is its OWN constant. Some overlap with MOMENTUM_UNIVERSE
+# is expected (mid-cap names that appear in both NIFTY 200 and NIFTY
+# Midcap-150) — this is fine because the two strategies are evaluated
+# separately and a name's behavior under each is a different signal.
+#
+# All tickers .NS for yfinance. Total-return (split + dividend) adjusted
+# data ONLY — matching the live yfinance feed, per the lesson learned
+# from the data-consistency ticket. Names that were liquid 10 years
+# ago but have since delisted, merged out, or gone to zero are
+# ENTIRELY ABSENT — a much more severe absence for small-caps than
+# for large-caps because the tail-rate of bankruptcy is much higher
+# in this segment.
+#
+# ⚠️ SURVIVORSHIP IS SEVERE for small-caps. The MOMENTUM_UNIVERSE
+# headline discount was 30%; for SMID, the SMOM-3 brief mandates
+# **45% PF haircut** as the headline. State loudly. See
+# ``SMID_SURVIVORSHIP_NOTE`` below.
+SMID_UNIVERSE: list[str] = sorted({
+    # ── Tier-2 IT services (15) ──────────────────────────────────
+    "PERSISTENT.NS", "COFORGE.NS", "MPHASIS.NS", "KPITTECH.NS",
+    "TATATECH.NS", "MASTEK.NS", "BIRLASOFT.NS", "CYIENT.NS",
+    "ZENSARTECH.NS", "INTELLECT.NS", "OFSS.NS", "FIRSTSOURCE.NS",
+    "RATEGAIN.NS", "NEWGEN.NS", "TANLA.NS",
+    # ── Mid/small Banks (10) ─────────────────────────────────────
+    "AUBANK.NS", "BANDHANBNK.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS",
+    "INDIANB.NS", "UNIONBANK.NS", "CANBK.NS", "BANKINDIA.NS",
+    "KARURVYSYA.NS", "IIFL.NS",
+    # ── NBFCs / financial services (16) ──────────────────────────
+    "CHOLAFIN.NS", "MUTHOOTFIN.NS", "MANAPPURAM.NS", "LICHSGFIN.NS",
+    "BAJAJHLDNG.NS", "ABCAPITAL.NS", "PFC.NS", "RECLTD.NS",
+    "IRFC.NS", "HDFCAMC.NS", "NAM-INDIA.NS", "MFSL.NS",
+    "POLICYBZR.NS", "ANGELONE.NS", "5PAISA.NS", "PAYTM.NS",
+    # ── Insurance + exchanges (8) ────────────────────────────────
+    "STARHEALTH.NS", "LICI.NS",
+    "BSE.NS", "MCX.NS", "CDSL.NS", "IEX.NS", "KFINTECH.NS",
+    "CAMS.NS",
+    # ── Energy / power / utilities (12) ──────────────────────────
+    "IOC.NS", "HINDPETRO.NS", "OIL.NS", "PETRONET.NS",
+    "IGL.NS", "MGL.NS", "TATAPOWER.NS", "ADANIPOWER.NS",
+    "ADANIGREEN.NS", "JSWENERGY.NS", "NHPC.NS", "SJVN.NS",
+    # ── Auto / ancillaries (14) ──────────────────────────────────
+    "TVSMOTOR.NS", "ASHOKLEY.NS", "BHARATFORG.NS", "BOSCHLTD.NS",
+    "MOTHERSON.NS", "BALKRISIND.NS", "MRF.NS", "EXIDEIND.NS",
+    "APOLLOTYRE.NS", "ENDURANCE.NS", "SCHAEFFLER.NS",
+    "SUNDARMFIN.NS", "TIINDIA.NS", "CEAT.NS",
+    # ── Capital goods / engineering (15) ─────────────────────────
+    "SIEMENS.NS", "ABB.NS", "HAVELLS.NS", "CGPOWER.NS",
+    "BHEL.NS", "THERMAX.NS", "CROMPTON.NS", "VOLTAS.NS",
+    "BLUESTARCO.NS", "POLYCAB.NS", "KEI.NS", "FINCABLES.NS",
+    "AIAENG.NS", "PRAJIND.NS", "GRAVITA.NS",
+    # ── Cement (6) ───────────────────────────────────────────────
+    "SHREECEM.NS", "RAMCOCEM.NS", "JKCEMENT.NS", "DALBHARAT.NS",
+    "ACC.NS", "AMBUJACEM.NS",
+    # ── Metals & mining (8) ──────────────────────────────────────
+    "JINDALSTEL.NS", "SAIL.NS", "NMDC.NS", "MOIL.NS",
+    "HINDCOPPER.NS", "NATIONALUM.NS", "GMDC.NS", "COALINDIA.NS",
+    # ── Pharma (16) ──────────────────────────────────────────────
+    "AUROPHARMA.NS", "ZYDUSLIFE.NS", "TORNTPHARM.NS", "GLENMARK.NS",
+    "BIOCON.NS", "AJANTPHARM.NS", "ALKEM.NS", "IPCALAB.NS",
+    "LAURUSLABS.NS", "NATCOPHARM.NS", "ABBOTINDIA.NS", "PFIZER.NS",
+    "GLAND.NS", "JBCHEPHARM.NS", "GRANULES.NS", "SANOFI.NS",
+    # ── Healthcare services (5) ──────────────────────────────────
+    "APOLLOHOSP.NS", "FORTIS.NS", "MAXHEALTH.NS", "METROPOLIS.NS",
+    "RAINBOW.NS",
+    # ── FMCG / consumer staples (10) ─────────────────────────────
+    "VBL.NS", "NESTLEIND.NS", "BRITANNIA.NS",
+    "DABUR.NS", "MARICO.NS", "COLPAL.NS", "GODREJCP.NS",
+    "RADICO.NS", "UBL.NS", "EMAMILTD.NS",
+    # ── Retail / consumer discretionary (12) ─────────────────────
+    "TRENT.NS", "DMART.NS", "BATAINDIA.NS",
+    "PAGEIND.NS", "ABFRL.NS", "RELAXO.NS",
+    "JUBLFOOD.NS", "DEVYANI.NS", "WESTLIFE.NS",
+    "NYKAA.NS", "MEDPLUS.NS", "INDIGOPNTS.NS",
+    # ── Chemicals / paints (14) ──────────────────────────────────
+    "PIDILITIND.NS", "BERGEPAINT.NS", "AKZOINDIA.NS",
+    "KANSAINER.NS", "SRF.NS", "TATACHEM.NS", "DEEPAKNTR.NS",
+    "FINEORG.NS", "NAVINFLUOR.NS", "PCBL.NS", "VINATIORGA.NS",
+    "ROSSARI.NS", "ATUL.NS", "AARTIIND.NS",
+    # ── Realty (7) ───────────────────────────────────────────────
+    "DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS",
+    "BRIGADE.NS", "PHOENIXLTD.NS", "MAHLIFE.NS",
+    # ── Infrastructure / construction (9; GMRINFRA.NS dropped per
+    #    MOMENTUM_DROPPED_DEAD_TICKERS, replaced by GMRAIRPORT.NS) ──
+    "GMRAIRPORT.NS", "IRB.NS", "JSWINFRA.NS", "RVNL.NS",
+    "IRCON.NS", "NCC.NS", "KEC.NS", "JKLAKSHMI.NS",
+    "PNCINFRA.NS",
+    # ── Telecom + media (5) ──────────────────────────────────────
+    "IDEA.NS", "ZEEL.NS", "SUNTV.NS", "PVRINOX.NS", "SAREGAMA.NS",
+    # ── Defense (6) ──────────────────────────────────────────────
+    "HAL.NS", "BEL.NS", "MAZDOCK.NS", "BDL.NS", "MIDHANI.NS",
+    "GRSE.NS",
+    # ── Travel / leisure / logistics (8) ─────────────────────────
+    "IRCTC.NS", "INDHOTEL.NS", "EIHOTEL.NS", "LEMONTREE.NS",
+    "MAHLOG.NS", "CONCOR.NS", "DELHIVERY.NS", "BLUEDART.NS",
+    # ── Specialty internet / new economy (10) ────────────────────
+    "INFOEDGE.NS", "JUSTDIAL.NS", "INDIAMART.NS", "EASEMYTRIP.NS",
+    "MAPMYINDIA.NS", "KAYNES.NS", "AMBER.NS", "SONACOMS.NS",
+    "ZAGGLE.NS", "LATENTVIEW.NS",
+    # ── Renewable / EV (5) ───────────────────────────────────────
+    "SUZLON.NS", "INOXWIND.NS", "WAAREEENER.NS", "KPIGREEN.NS",
+    "SOLARINDS.NS",
+    # ── Misc small/mid (12) ──────────────────────────────────────
+    "ASTRAL.NS", "SUPREMEIND.NS", "KAJARIACER.NS", "CENTURYPLY.NS",
+    "GREENPANEL.NS", "GREENPLY.NS", "JBMA.NS", "RAINBOW.NS",
+    "PIIND.NS", "TIINDIA.NS", "GUJGASLTD.NS", "GUJALKALI.NS",
+})
+
+
+# Sector tags for the SMID-only names so the harness per-sector cap
+# remains meaningful for SMOM holdings. Symbols already in SECTORS
+# (via the SWING / MOMENTUM mappings) are NOT re-added. The MOM
+# universe overlap is intentional — those names already have a
+# sector; we just need tags for the SMOM-only newcomers.
+_SMID_NEW_SECTORS: dict[str, str] = {
+    # IT
+    "TATATECH.NS": "IT", "MASTEK.NS": "IT", "BIRLASOFT.NS": "IT",
+    "CYIENT.NS": "IT", "ZENSARTECH.NS": "IT", "INTELLECT.NS": "IT",
+    "OFSS.NS": "IT", "FIRSTSOURCE.NS": "IT", "RATEGAIN.NS": "IT",
+    "NEWGEN.NS": "IT", "TANLA.NS": "IT",
+    # Banks
+    "BANDHANBNK.NS": "BANK", "INDIANB.NS": "BANK", "UNIONBANK.NS": "BANK",
+    "CANBK.NS": "BANK", "BANKINDIA.NS": "BANK",
+    "KARURVYSYA.NS": "BANK", "IIFL.NS": "BANK",
+    # Financial
+    "BAJAJHLDNG.NS": "FINANCIAL", "ABCAPITAL.NS": "FINANCIAL",
+    "IRFC.NS": "FINANCIAL", "HDFCAMC.NS": "FINANCIAL",
+    "NAM-INDIA.NS": "FINANCIAL", "POLICYBZR.NS": "FINANCIAL",
+    "ANGELONE.NS": "FINANCIAL", "5PAISA.NS": "FINANCIAL",
+    "PAYTM.NS": "FINANCIAL", "STARHEALTH.NS": "FINANCIAL",
+    "BSE.NS": "FINANCIAL", "MCX.NS": "FINANCIAL", "CDSL.NS": "FINANCIAL",
+    "IEX.NS": "FINANCIAL", "KFINTECH.NS": "FINANCIAL", "CAMS.NS": "FINANCIAL",
+    # Capital goods
+    "THERMAX.NS": "INFRA", "CROMPTON.NS": "INFRA", "VOLTAS.NS": "INFRA",
+    "BLUESTARCO.NS": "INFRA", "POLYCAB.NS": "INFRA", "KEI.NS": "INFRA",
+    "FINCABLES.NS": "INFRA", "AIAENG.NS": "INFRA", "PRAJIND.NS": "INFRA",
+    "GRAVITA.NS": "INFRA",
+    # Cement
+    "JKCEMENT.NS": "CEMENT", "DALBHARAT.NS": "CEMENT", "JKLAKSHMI.NS": "CEMENT",
+    # Auto
+    "ENDURANCE.NS": "AUTO", "SCHAEFFLER.NS": "AUTO", "SUNDARMFIN.NS": "AUTO",
+    "TIINDIA.NS": "AUTO", "CEAT.NS": "AUTO", "BALKRISIND.NS": "AUTO",
+    "MRF.NS": "AUTO", "EXIDEIND.NS": "AUTO", "APOLLOTYRE.NS": "AUTO",
+    # Metals
+    "MOIL.NS": "METAL", "HINDCOPPER.NS": "METAL", "NATIONALUM.NS": "METAL",
+    "GMDC.NS": "METAL",
+    # Pharma
+    "AJANTPHARM.NS": "PHARMA", "ALKEM.NS": "PHARMA", "IPCALAB.NS": "PHARMA",
+    "LAURUSLABS.NS": "PHARMA", "NATCOPHARM.NS": "PHARMA",
+    "ABBOTINDIA.NS": "PHARMA", "PFIZER.NS": "PHARMA", "GLAND.NS": "PHARMA",
+    "JBCHEPHARM.NS": "PHARMA", "GRANULES.NS": "PHARMA", "SANOFI.NS": "PHARMA",
+    # Healthcare
+    "RAINBOW.NS": "HEALTHCARE",
+    # FMCG
+    "UBL.NS": "FMCG", "RADICO.NS": "FMCG", "EMAMILTD.NS": "FMCG",
+    # FINANCIAL — extras
+    "LICHSGFIN.NS": "FINANCIAL",
+    # Retail
+    "ABFRL.NS": "RETAIL", "RELAXO.NS": "RETAIL", "JUBLFOOD.NS": "RETAIL",
+    "DEVYANI.NS": "RETAIL", "WESTLIFE.NS": "RETAIL", "NYKAA.NS": "RETAIL",
+    "MEDPLUS.NS": "RETAIL", "INDIGOPNTS.NS": "RETAIL",
+    # Chemicals
+    "KANSAINER.NS": "CHEMICAL", "FINEORG.NS": "CHEMICAL",
+    "NAVINFLUOR.NS": "CHEMICAL", "PCBL.NS": "CHEMICAL",
+    "VINATIORGA.NS": "CHEMICAL", "ROSSARI.NS": "CHEMICAL",
+    "ATUL.NS": "CHEMICAL", "AARTIIND.NS": "CHEMICAL",
+    "GUJGASLTD.NS": "CHEMICAL", "GUJALKALI.NS": "CHEMICAL",
+    "PIIND.NS": "CHEMICAL",
+    # Realty
+    "BRIGADE.NS": "REALTY", "PHOENIXLTD.NS": "REALTY", "MAHLIFE.NS": "REALTY",
+    # Infra
+    "JSWINFRA.NS": "INFRA", "RVNL.NS": "INFRA", "IRCON.NS": "INFRA",
+    "NCC.NS": "INFRA", "KEC.NS": "INFRA", "PNCINFRA.NS": "INFRA",
+    # Telecom / Media
+    "PVRINOX.NS": "MEDIA", "SAREGAMA.NS": "MEDIA",
+    # Defense
+    "MAZDOCK.NS": "DEFENSE", "BDL.NS": "DEFENSE", "MIDHANI.NS": "DEFENSE",
+    "GRSE.NS": "DEFENSE",
+    # Travel/Logistics
+    "IRCTC.NS": "RETAIL", "INDHOTEL.NS": "RETAIL", "EIHOTEL.NS": "RETAIL",
+    "LEMONTREE.NS": "RETAIL", "MAHLOG.NS": "INFRA", "CONCOR.NS": "INFRA",
+    "DELHIVERY.NS": "INFRA", "BLUEDART.NS": "INFRA",
+    # Specialty internet / new economy
+    "INFOEDGE.NS": "IT", "JUSTDIAL.NS": "IT", "INDIAMART.NS": "IT",
+    "EASEMYTRIP.NS": "IT", "MAPMYINDIA.NS": "IT", "KAYNES.NS": "INFRA",
+    "AMBER.NS": "INFRA", "SONACOMS.NS": "AUTO", "ZAGGLE.NS": "IT",
+    "LATENTVIEW.NS": "IT",
+    # Renewable / EV
+    "SUZLON.NS": "POWER", "INOXWIND.NS": "POWER", "WAAREEENER.NS": "POWER",
+    "KPIGREEN.NS": "POWER", "SOLARINDS.NS": "POWER",
+    # Misc
+    "ASTRAL.NS": "INFRA", "SUPREMEIND.NS": "INFRA", "KAJARIACER.NS": "INFRA",
+    "CENTURYPLY.NS": "INFRA", "GREENPANEL.NS": "INFRA", "GREENPLY.NS": "INFRA",
+    "JBMA.NS": "AUTO",
+}
+SECTORS.update(_SMID_NEW_SECTORS)
+
+
+# Names in SMID_UNIVERSE not yet in market_data.db (computed at import).
+# Used by the SMOM-1 backfill script to know which symbols to fetch.
+# A name already present from MOMENTUM_UNIVERSE is excluded so the
+# backfill doesn't waste yfinance calls re-fetching it.
+def _smid_new_to_db() -> list[str]:
+    """Computed at import. Symbols in SMID_UNIVERSE that aren't in
+    MOMENTUM_UNIVERSE OR POINT_IN_TIME_NSE25 — i.e. those the prior
+    backfills didn't reach. (We don't read the DB here; the backfill
+    script verifies presence at runtime via SQLite.)"""
+    existing_in_db_by_design = set(MOMENTUM_UNIVERSE) | set(POINT_IN_TIME_NSE25)
+    return sorted(set(SMID_UNIVERSE) - existing_in_db_by_design)
+
+
+SMID_NEW_TO_DB: list[str] = _smid_new_to_db()
+
+
+SMID_SURVIVORSHIP_NOTE = (
+    "⚠️ SMID_UNIVERSE is CURRENT NIFTY Midcap-150 + Smallcap-250 membership, "
+    "NOT point-in-time. Survivorship bias is MUCH more severe at this end of "
+    "the market than for large-caps because the BANKRUPTCY / DELIST tail is "
+    "much fatter. Names that were liquid 10 years ago and have since "
+    "delisted, merged out, or gone to zero are entirely absent. SMOM-3's "
+    "backtest report MUST apply an explicit **45% PF haircut** as the "
+    "HEADLINE discount (not the 30% used for MOMENTUM_UNIVERSE). State "
+    "loudly. True PIT membership rotation is a separate later upgrade."
+)
+
+
 def get_universe() -> list[str]:
     """The tradeable symbols (excludes macro indices, which live in config)."""
     return list(POINT_IN_TIME_NSE25)
@@ -266,6 +496,11 @@ def get_universe() -> list[str]:
 def get_momentum_universe() -> list[str]:
     """The broader symbol set used by signals/momentum.py."""
     return list(MOMENTUM_UNIVERSE)
+
+
+def get_smid_universe() -> list[str]:
+    """The SMID symbol set used by signals/smid_momentum.py."""
+    return list(SMID_UNIVERSE)
 
 
 def get_sector(symbol: str) -> str:
