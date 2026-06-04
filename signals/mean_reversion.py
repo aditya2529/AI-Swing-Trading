@@ -77,7 +77,7 @@ import pandas as pd
 from backtesting.replay import BarView, Book, EnterOrder, ExitOrder
 from config import (
     ATR_PERIOD, MR_MAX_HOLD_DAYS, MR_RSI_EXIT, MR_RSI_OVERSOLD,
-    MR_RSI_PERIOD, MR_TREND_MA,
+    MR_RSI_PERIOD, MR_TREND_MA, REGIME_INDEX, REGIME_MA,
 )
 from features.engineer import compute_atr, compute_rsi
 from signals.risk import initial_stop
@@ -89,6 +89,24 @@ class MeanReversionStrategy:
 
     Defaults pull from ``config.py``; tests may override per-instance
     to exercise edges without mutating module globals.
+
+    MR-3 — the ``use_regime_gate`` toggle
+    -------------------------------------
+    When True, NEW ENTRIES are blocked unless ^NSEI close[T] is above
+    its ``regime_ma``-day MA (read from the same causal view). Exits
+    are NEVER gated — open positions are always managed to exit
+    regardless of regime, so the gate cannot strand a trade with no
+    exit logic.
+
+    The default is False — the MR-1 baseline behavior — so every
+    existing test that constructed ``MeanReversionStrategy()`` keeps
+    its existing semantics. Pass ``use_regime_gate=True`` (e.g. via
+    the MR-3 A/B backtest) to evaluate the gated variant.
+
+    ``^``-prefixed symbols (e.g. ``^NSEI``) are ALWAYS skipped from
+    trading, regardless of the gate toggle. This lets a backtest pass
+    the regime index in the data dict (which is required when the gate
+    is on) without the strategy trying to trade it as a regular symbol.
     """
     trend_ma: int = MR_TREND_MA
     rsi_period: int = MR_RSI_PERIOD
@@ -96,6 +114,9 @@ class MeanReversionStrategy:
     rsi_exit: float = MR_RSI_EXIT
     atr_period: int = ATR_PERIOD
     max_hold_days: int = MR_MAX_HOLD_DAYS
+    use_regime_gate: bool = False
+    regime_index: str = REGIME_INDEX
+    regime_ma: int = REGIME_MA
 
     # ── decide ──────────────────────────────────────────────────────────
 
@@ -106,24 +127,57 @@ class MeanReversionStrategy:
         implicitly available to today's new entries when they fill at
         T+1 open (matches the harness's own exits-before-entries order
         within a tick).
+
+        Exits are NEVER gated by the regime check — open positions are
+        always managed. New entries are blocked when
+        ``use_regime_gate=True`` and the regime read says the broad
+        index is below its MA.
         """
         orders: list = []
 
-        # Exits for currently-open positions
+        # Exits for currently-open positions — always run, regardless
+        # of regime. The gate blocks NEW exposure, not the management
+        # of existing exposure.
         for sym, pos in book.positions.items():
             exit_order = self._maybe_exit(view, sym, pos)
             if exit_order is not None:
                 orders.append(exit_order)
 
-        # Entries for symbols we're FLAT in
-        for sym in view.symbols():
-            if book.has_position(sym):
-                continue
-            enter_order = self._maybe_enter(view, sym)
-            if enter_order is not None:
-                orders.append(enter_order)
+        # Regime gate (entries-only). Read once per decide() call to
+        # avoid recomputing per-symbol.
+        regime_ok = True
+        if self.use_regime_gate:
+            regime_ok = self._regime_on(view)
+
+        if regime_ok:
+            for sym in view.symbols():
+                # ALWAYS skip '^'-prefixed symbols — they are macro
+                # indices (e.g. ^NSEI) that the strategy may need to
+                # READ for the regime gate but should never TRADE.
+                if sym.startswith("^"):
+                    continue
+                if book.has_position(sym):
+                    continue
+                enter_order = self._maybe_enter(view, sym)
+                if enter_order is not None:
+                    orders.append(enter_order)
 
         return orders
+
+    # ── Regime ──────────────────────────────────────────────────────────
+
+    def _regime_on(self, view: BarView) -> bool:
+        """Return True iff regime_index close[T] > its regime_ma-day MA.
+
+        Falls back to OFF (no new entries) when the index isn't in the
+        causal view or has fewer than ``regime_ma`` bars — safe default
+        so a missing data source can't accidentally allow trading.
+        """
+        h = view.history(self.regime_index)
+        if h.empty or len(h) < self.regime_ma:
+            return False
+        ma = float(h["close"].iloc[-self.regime_ma:].mean())
+        return float(h["close"].iloc[-1]) > ma
 
     # ── Entry ───────────────────────────────────────────────────────────
 

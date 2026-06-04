@@ -1,16 +1,24 @@
 """Unit tests for the mean-reversion swing strategy.
 
-One test per rule the MR-1 ticket called out:
+MR-1 (original 7 tests, one per baseline rule):
   1. Uptrend filter blocks names whose close is BELOW the trend MA
      (no falling-knife dip-buys).
-  2. RSI < MR_RSI_OVERSOLD is REQUIRED (sufficiently oversold).
+  2. RSI < MR_RSI_OVERSOLD is REQUIRED.
   3. RSI >= MR_RSI_OVERSOLD blocks entry (not oversold enough).
   4. Bounce exit fires when RSI > MR_RSI_EXIT.
   5. Time stop fires at MR_MAX_HOLD_DAYS.
   6. Hard stop fires on close < position.stop.
-  7. Strategy never reads beyond cutoff (end-to-end future-mutation check
-     through the real MeanReversionStrategy — same shape as the gate's
-     own canonical leak detector, but exercised through THIS strategy).
+  7. Strategy never reads beyond cutoff (end-to-end no-leak).
+
+MR-3 (regime-gate toggle + ^-symbol skip):
+  8. Gate ON + ^NSEI close BELOW its MA -> NO entries (regime gate works).
+  9. Gate ON + ^NSEI close ABOVE its MA -> entries allowed.
+ 10. ^-prefixed symbols are NEVER traded (even if their setup looks valid).
+ 11. Gate OFF reproduces MR-1 baseline exactly (regression — the new
+     toggle does not change default behavior).
+ 12. Gate ON exits are NOT gated by the regime read (open positions
+     are always managed).
+ 13. No-leak end-to-end still holds with gate ON.
 """
 from __future__ import annotations
 
@@ -297,3 +305,209 @@ def test_strategy_decisions_invariant_to_future_mutation():
         "MeanReversionStrategy decisions on days <= cut changed when "
         "future bars were mutated — a look-ahead leak exists in the "
         "strategy or in something it transitively reads.")
+
+
+# ── MR-3 — Regime gate toggle + ^-symbol skip ───────────────────────────
+
+
+def _falling_nsei(n: int = 260, start_close: float = 18_000.0,
+                   drift: float = -0.0015) -> pd.DataFrame:
+    """A NIFTY proxy that drifts DOWN — close stays below the 50-day MA
+    from day ~50 onward. Used for the regime-OFF gate test."""
+    rng = np.random.default_rng(53)
+    closes = start_close * np.exp(np.cumsum(
+        rng.normal(drift, 0.005, n)))
+    return _make_bars(closes)
+
+
+def _rising_nsei(n: int = 260, start_close: float = 15_000.0,
+                  drift: float = 0.0015) -> pd.DataFrame:
+    """A NIFTY proxy that drifts UP — close stays above the 50-day MA
+    from day ~50 onward. Used for the regime-ON gate test."""
+    rng = np.random.default_rng(67)
+    closes = start_close * np.exp(np.cumsum(
+        rng.normal(drift, 0.005, n)))
+    return _make_bars(closes)
+
+
+def _build_view_book_with_nsei(symbol_df: pd.DataFrame,
+                                 nsei_df: pd.DataFrame,
+                                 *, book: Book | None = None
+                                 ) -> tuple[BarView, Book]:
+    """Same as ``_build_view_book`` but with ^NSEI in the data dict so
+    the regime gate has something to read."""
+    data = {"X": symbol_df, "^NSEI": nsei_df}
+    cutoff = symbol_df.index[-1]
+    view = BarView(data, cutoff=cutoff)
+    if book is None:
+        book = Book(cash=500_000.0, equity=500_000.0, positions={})
+    return view, book
+
+
+# 8. Gate ON + ^NSEI BELOW its MA -> NO entries
+def test_gate_on_blocks_entry_when_nsei_below_ma():
+    """The canonical MR setup (uptrend symbol + RSI < 30) must NOT
+    fire when use_regime_gate=True and ^NSEI < its 50-DMA. The
+    fixture has the same symbol the baseline test entered, but with
+    a downtrending NIFTY proxy added to the view."""
+    sym = _uptrend_with_dip()
+    nsei = _falling_nsei()
+    view, book = _build_view_book_with_nsei(sym, nsei)
+    orders = MeanReversionStrategy(use_regime_gate=True).decide(view, book)
+    assert not any(isinstance(o, EnterOrder) for o in orders), (
+        "Regime gate ON should block all new entries when ^NSEI close "
+        "is below its 50-DMA. The setup that triggered MR-1 baseline "
+        f"fired anyway: {orders!r}.")
+
+
+# 9. Gate ON + ^NSEI ABOVE its MA -> entries allowed
+def test_gate_on_allows_entry_when_nsei_above_ma():
+    """Same fixture as test 8 but with an uptrending NIFTY proxy.
+    The gate must NOT block entries when the regime read is favorable."""
+    sym = _uptrend_with_dip()
+    nsei = _rising_nsei()
+    view, book = _build_view_book_with_nsei(sym, nsei)
+    orders = MeanReversionStrategy(use_regime_gate=True).decide(view, book)
+    enter = [o for o in orders if isinstance(o, EnterOrder)]
+    assert len(enter) == 1 and enter[0].symbol == "X", (
+        f"Regime gate ON should ALLOW entry when ^NSEI close is above "
+        f"its 50-DMA. Got: {orders!r}.")
+
+
+# 10. ^-prefixed symbols are NEVER traded
+def test_caret_symbols_never_traded():
+    """Even when ^NSEI itself has a setup that would otherwise trigger
+    (uptrend + oversold dip), the strategy must skip it. Macro indices
+    are read for regime gating, never traded."""
+    # Build ^NSEI with a textbook MR setup — uptrend then a dip.
+    nsei = _uptrend_with_dip()
+    # And a regular symbol with NO setup so the only candidate is ^NSEI.
+    rng = np.random.default_rng(73)
+    flat = 100.0 * np.exp(np.cumsum(rng.normal(0.0008, 0.006, 260)))
+    flat_df = _make_bars(flat)
+    data = {"X": flat_df, "^NSEI": nsei}
+    view = BarView(data, cutoff=nsei.index[-1])
+    book = Book(cash=500_000.0, equity=500_000.0, positions={})
+    # Test BOTH toggle settings — ^-skip applies regardless.
+    for gate_setting in (False, True):
+        orders = MeanReversionStrategy(
+            use_regime_gate=gate_setting).decide(view, book)
+        assert not any(o.symbol.startswith("^") for o in orders), (
+            f"Strategy emitted an order for a '^'-prefixed symbol "
+            f"(use_regime_gate={gate_setting}): {orders!r}. "
+            f"^-symbols must never be traded.")
+
+
+# 11. Gate OFF reproduces MR-1 baseline exactly (regression)
+def test_gate_off_reproduces_baseline_on_canonical_setup():
+    """The use_regime_gate=False default must produce IDENTICAL
+    behavior to the original MR-1 baseline. On the canonical setup,
+    the baseline emits exactly one EnterOrder; the toggle-off strategy
+    must do the same."""
+    sym = _uptrend_with_dip()
+    # No ^NSEI in the data — proves the gate is OFF by default (any
+    # access to a missing index would either crash or block entry).
+    view, book = _build_view_book(sym)
+    orders_default = MeanReversionStrategy().decide(view, book)
+    orders_explicit = MeanReversionStrategy(
+        use_regime_gate=False).decide(view, book)
+    # Same number of orders, same symbols, same stops, same reasons.
+    assert orders_default == orders_explicit, (
+        "Default-constructed strategy and use_regime_gate=False produce "
+        f"different orders: {orders_default!r} vs {orders_explicit!r}.")
+    enter = [o for o in orders_default if isinstance(o, EnterOrder)]
+    assert len(enter) == 1 and enter[0].symbol == "X", (
+        f"Gate-OFF baseline regression failed — expected 1 EnterOrder "
+        f"for X. Got: {orders_default!r}.")
+
+
+# 12. Gate ON exits are NOT gated by the regime read
+def test_gate_on_does_not_block_exits():
+    """The regime gate blocks NEW entries only — open positions must
+    always be managed (time stop, hard stop, RSI bounce) regardless
+    of what the index is doing. Otherwise a position could be stranded
+    when the regime turns down."""
+    sym = _uptrend_with_dip()
+    nsei = _falling_nsei()  # gate would BLOCK new entries
+    close_t = float(sym["close"].iloc[-1])
+
+    # Open position whose bars_held has hit the time cap. Time stop
+    # must still fire.
+    pos = Position(
+        symbol="X", entry_date=sym.index[-15], entry_price=close_t * 1.10,
+        shares=100, stop=close_t * 0.85, risk_per_share=close_t * 0.25,
+        cost_basis=close_t * 110, bars_held=MR_MAX_HOLD_DAYS,
+        highest_high=close_t * 1.15, highest_close=close_t)
+    book = Book(cash=400_000.0, equity=410_000.0, positions={"X": pos})
+    view, _ = _build_view_book_with_nsei(sym, nsei, book=book)
+
+    orders = MeanReversionStrategy(use_regime_gate=True).decide(view, book)
+    exit_orders = [o for o in orders if isinstance(o, ExitOrder)]
+    assert any(o.symbol == "X" and "time_stop" in o.reason
+                for o in exit_orders), (
+        f"Time-stop exit must fire even when the regime gate would "
+        f"block NEW entries. Got: {orders!r}.")
+
+
+# 13. No-leak end-to-end with gate ON
+def test_no_leak_with_gate_on():
+    """The future-mutation invariance test repeated with gate=True.
+    Any look-ahead via the new regime read would change pre-cut
+    decisions when post-cut ^NSEI is mutated."""
+    rng = np.random.default_rng(83)
+    n_pre = 253
+    pre = 100.0 * np.exp(np.cumsum(rng.normal(0.003, 0.005, n_pre)))
+    dip = np.linspace(pre[-1], pre[-1] * 0.82, 8)[1:]
+    n_post = 280 - n_pre - len(dip)
+    post = dip[-1] * np.exp(np.cumsum(rng.normal(0.002, 0.010, n_post)))
+    closes = np.concatenate([pre, dip, post])
+    band = closes * 0.005
+    sym = _make_bars(closes, highs=closes + band, lows=closes - band,
+                      volumes=rng.uniform(8e5, 1.2e6, len(closes)))
+    # Rising NSEI throughout so the gate would not arbitrarily block
+    # entries on the base run.
+    nsei = _rising_nsei(n=len(closes))
+
+    data = {"X": sym, "^NSEI": nsei}
+    base = run_replay(copy.deepcopy(data),
+                       MeanReversionStrategy(use_regime_gate=True),
+                       record_decisions=True)
+
+    cut = sym.index[265]
+    mutated = copy.deepcopy(data)
+    future_x = mutated["X"].index > cut
+    future_n = mutated["^NSEI"].index > cut
+    fut_n_x = int(future_x.sum())
+    fut_n_n = int(future_n.sum())
+    rng2 = np.random.default_rng(797)
+    new_x = 150.0 * np.exp(np.cumsum(rng2.normal(0.001, 0.025, fut_n_x)))
+    new_n = 22_000.0 * np.exp(np.cumsum(rng2.normal(-0.003, 0.015, fut_n_n)))
+    for col in ("open", "high", "low", "close"):
+        mutated["X"].loc[future_x, col] = new_x * (1.01 if col == "high"
+                                                     else 0.99 if col == "low"
+                                                     else 1.0)
+        mutated["^NSEI"].loc[future_n, col] = new_n * (1.01 if col == "high"
+                                                          else 0.99 if col == "low"
+                                                          else 1.0)
+    mutated["X"].loc[future_x, "volume"] = rng2.uniform(5e5, 5e6, fut_n_x)
+    mutated["^NSEI"].loc[future_n, "volume"] = rng2.uniform(5e5, 5e6, fut_n_n)
+    after = run_replay(mutated,
+                        MeanReversionStrategy(use_regime_gate=True),
+                        record_decisions=True)
+
+    # Gated fixture produces a single dip-entry before cut and exits
+    # post-cut — 1 non-empty pre-cut decision is enough for the leak
+    # check to have teeth (it still pins one specific entry choice
+    # against future-bar mutation).
+    base_non_empty_le_cut = [d for d in base["decisions"]
+                              if d[0] <= cut and d[1]]
+    assert len(base_non_empty_le_cut) >= 1, (
+        f"Fixture is vacuous — gated strategy emitted only "
+        f"{len(base_non_empty_le_cut)} non-empty decisions <= cut.")
+
+    base_le_cut = [d for d in base["decisions"] if d[0] <= cut]
+    after_le_cut = [d for d in after["decisions"] if d[0] <= cut]
+    assert base_le_cut == after_le_cut, (
+        "Gated MeanReversionStrategy decisions on days <= cut changed "
+        "when future bars were mutated — a look-ahead leak exists in "
+        "the regime read or downstream of it.")
