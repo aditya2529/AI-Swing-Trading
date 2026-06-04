@@ -37,6 +37,8 @@ per-symbol DataFrames, so a replay can never corrupt live state.
 """
 from __future__ import annotations
 
+import math
+import statistics
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -46,6 +48,46 @@ from config import (
     BROKERAGE_PCT, INITIAL_CAPITAL, MAX_PER_SECTOR, MAX_PORTFOLIO_HEAT,
     MAX_POSITIONS, MAX_RISK_PCT, PERIODS_PER_YEAR, SECTORS, SLIPPAGE_PCT,
 )
+
+
+# ── Vol-scaling helper (MOM-5) ─────────────────────────────────────────
+
+
+def _compute_exposure_mult(equity_history: list, vol_target_annual: float,
+                             vol_window: int) -> float:
+    """Vol-scaled exposure multiplier (Barroso-Santa-Clara momentum-crash
+    fix). Compares the trailing realized annualized volatility of the
+    daily equity-return series against a fixed target.
+
+    Returns a multiplier in ``[0.0, 1.0]``:
+        exposure_mult = clip(vol_target_annual / sigma_annual, 0.0, 1.0)
+
+    The CAP at 1.0 prevents leverage (this is a long-only cash system).
+    Fallback to 1.0 (no scaling) when:
+        * fewer than ``vol_window + 1`` equity points are available
+          (warm-up — exactly enough returns to compute std without bias);
+        * trailing realized vol is non-positive (degenerate flat series).
+
+    The input ``equity_history`` is a sequence of close-MTM equity values
+    in CHRONOLOGICAL order — the harness's own ``equity_rows`` list,
+    which is appended exactly once per timeline tick AFTER that tick's
+    close-MTM step. Calling this BEFORE today's MTM is appended is what
+    makes the read causal (today's close hasn't happened yet at the
+    entry-fill moment).
+    """
+    if len(equity_history) < vol_window + 1:
+        return 1.0
+    recent = equity_history[-(vol_window + 1):]
+    rets = [recent[i + 1] / recent[i] - 1.0
+            for i in range(len(recent) - 1)
+            if recent[i] > 0]
+    if len(rets) < 2:
+        return 1.0
+    sigma_daily = statistics.stdev(rets)
+    sigma_annual = sigma_daily * math.sqrt(PERIODS_PER_YEAR)
+    if sigma_annual <= 0:
+        return 1.0
+    return max(0.0, min(vol_target_annual / sigma_annual, 1.0))
 
 
 # ── Orders the strategy can return ──────────────────────────────────────
@@ -159,6 +201,8 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                max_per_sector: int = MAX_PER_SECTOR,
                max_heat: float = MAX_PORTFOLIO_HEAT,
                dd_cap_pct: float | None = None,
+               vol_target_annual: float | None = None,
+               vol_window: int = 63,
                close_at_end: bool = True,
                record_decisions: bool = False) -> dict:
     """Replay ``strategy`` over per-symbol daily ``data``.
@@ -186,6 +230,25 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             is the running max of the close-MTM equity series the
             harness already computes, so the comparison uses only
             information knowable at day-T open (causal — no look-ahead).
+        vol_target_annual: Barroso-Santa-Clara vol-scaled exposure
+            (MOM-5). ``None`` (default) disables vol scaling and
+            reproduces prior behaviour byte-for-byte (regression-safe).
+            Otherwise, at every day-T entry-fill moment, the trailing
+            realized annualized volatility of the close-MTM equity
+            series over ``vol_window`` days is compared against the
+            target; ``exposure_mult = clip(target / realized, 0.0, 1.0)``
+            scales the shares of each new entry that day (no leverage —
+            the cap at 1.0 means we never SCALE UP in calm periods,
+            only down in turbulent ones). Causal: ``equity_rows`` is
+            appended AFTER each day's close MTM step, so the vol read
+            at the day-T open uses only equity through day T-1 close.
+            Exits and the DD cap are unaffected. When fewer than
+            ``vol_window + 1`` equity points exist or realized vol is
+            zero, ``exposure_mult = 1.0`` (no scaling).
+        vol_window: rolling window (days) for the realized-vol read.
+            Default 63 (~3 trading months — the
+            Barroso-Santa-Clara standard). Ignored when
+            ``vol_target_annual is None``.
         close_at_end: force-close open positions at the final bar's close
             so end-of-data positions become realised trades.
         record_decisions: also return the per-day decision log (used by the
@@ -210,6 +273,10 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
     equity_rows: list = []
     decisions_log: list = []
     pending: list = []   # orders decided yesterday, to fill at today's open
+    # Per-day exposure multiplier (vol-scaling diagnostic). Populated
+    # only when ``vol_target_annual is not None``; otherwise stays empty
+    # so the default-off code path is byte-equivalent to prior behaviour.
+    exposure_mults_log: list = []
     # Running peak of the close-MTM equity series. Used only by the
     # ``dd_cap_pct`` halt check; updated after each day's close MTM step.
     # Seeded at ``initial_capital`` so the very first day has a baseline
@@ -272,6 +339,19 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             if equity_at_open <= threshold:
                 enters = []   # halted — new exposure blocked today
 
+        # ── Vol-scaling exposure multiplier (entries only) ─────────
+        # Causal: ``equity_rows`` holds close-MTM equity through DAY
+        # T-1 (today's close hasn't happened yet). Computed every day
+        # the vol scaler is on, regardless of whether ``enters`` is
+        # non-empty — gives a complete per-day exposure trace for the
+        # MOM-5 diagnostic. Applied to today's entries only.
+        exposure_mult = 1.0
+        if vol_target_annual is not None:
+            equity_series = [e for _, e in equity_rows]
+            exposure_mult = _compute_exposure_mult(
+                equity_series, vol_target_annual, vol_window)
+            exposure_mults_log.append((t, exposure_mult))
+
         for o in enters:
             if o.symbol in positions:
                 continue
@@ -295,6 +375,13 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             shares = int((risk_pct * equity_now) // risk_per_share)
             if shares <= 0:
                 continue
+            # Vol-scaled exposure (MOM-5): trim shares BEFORE heat / cash
+            # checks so those caps apply to the post-scaling size.
+            # exposure_mult is 1.0 when vol_target_annual is None (no-op).
+            if vol_target_annual is not None and exposure_mult < 1.0:
+                shares = int(shares * exposure_mult)
+                if shares <= 0:
+                    continue
             if (_open_risk() + shares * risk_per_share) > max_heat * equity_now:
                 continue
             cost = shares * fill
@@ -397,4 +484,8 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
     }
     if record_decisions:
         result["decisions"] = decisions_log
+    if vol_target_annual is not None:
+        # Per-day exposure multiplier trace — only present when the vol
+        # scaler is on, so the default-off return shape is unchanged.
+        result["exposure_mults"] = exposure_mults_log
     return result

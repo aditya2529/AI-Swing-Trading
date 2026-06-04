@@ -244,3 +244,178 @@ def test_dd_cap_entries_resume_after_recovery():
     assert res["metrics"]["n_trades"] >= 2, (
         f"Re-arm failed — only {res['metrics']['n_trades']} trade(s) "
         f"with a recovery above the prior peak.")
+
+
+# ── MOM-5 — vol-scaled exposure (Barroso-Santa-Clara overlay) ──────────
+
+
+from backtesting.replay import _compute_exposure_mult
+
+
+def test_compute_exposure_mult_insufficient_history_returns_one():
+    """Fewer than ``vol_window + 1`` equity points → no scaling.
+    We need exactly ``vol_window`` daily returns, which is
+    ``vol_window + 1`` equity values, before we will scale."""
+    # 5 equity values -> only 4 daily returns -> can't compute window=10
+    eqs = [100.0, 101.0, 100.5, 102.0, 101.0]
+    assert _compute_exposure_mult(eqs, vol_target_annual=0.12,
+                                    vol_window=10) == 1.0
+
+
+def test_compute_exposure_mult_calm_path_returns_one():
+    """A FLAT equity series has zero realized vol → exposure_mult = 1.0
+    by the degenerate-vol fallback. (Vol=0 would otherwise blow up the
+    target/realized division.)"""
+    eqs = [100.0] * 100      # perfectly flat
+    mult = _compute_exposure_mult(eqs, vol_target_annual=0.12, vol_window=63)
+    assert mult == 1.0, (
+        f"Flat equity should yield no-scaling fallback, got {mult}")
+
+
+def test_compute_exposure_mult_low_vol_path_returns_one_via_cap():
+    """A LOW-vol equity path (sigma_annual well below target) — the
+    raw ratio target/sigma exceeds 1.0, but the cap at 1.0 means we
+    NEVER LEVER UP. Long-only cash system: 1.0 is the ceiling."""
+    import math
+    import statistics
+    # ~2% annualized vol — well below the 12% target.
+    sigma_daily = 0.02 / math.sqrt(252)
+    rng_state = [100.0]
+    # Deterministic tiny zig-zag so std is well-defined but small.
+    for i in range(100):
+        rng_state.append(rng_state[-1] * (1.0 + sigma_daily * (1 if i % 2 == 0 else -1)))
+    mult = _compute_exposure_mult(rng_state, vol_target_annual=0.12,
+                                    vol_window=63)
+    # ratio would be ~6, clipped to 1.0
+    assert mult == 1.0, (
+        f"Low-vol path should hit the no-leverage cap at 1.0, got {mult}")
+
+
+def test_compute_exposure_mult_high_vol_path_reduces_below_one():
+    """A HIGH-vol equity path (sigma_annual well above target) →
+    exposure_mult should be strictly less than 1.0 and equal
+    target / sigma_annual to high precision."""
+    import math
+    import statistics
+    # ~40% annualized vol — well above the 12% target.
+    target = 0.12
+    eqs = [100.0]
+    sigma_daily = 0.40 / math.sqrt(252)
+    for i in range(100):
+        eqs.append(eqs[-1] * (1.0 + sigma_daily * (1 if i % 2 == 0 else -1)))
+    mult = _compute_exposure_mult(eqs, vol_target_annual=target,
+                                    vol_window=63)
+    # Reconstruct expected: rets are alternating +sigma_d / -sigma_d
+    # so std should be sigma_d (approximately; statistics.stdev uses
+    # sample std). Annualized ~= 0.40.
+    rets = [eqs[i+1]/eqs[i] - 1.0 for i in range(len(eqs)-1)]
+    expected_sigma_annual = statistics.stdev(rets[-63:]) * math.sqrt(252)
+    expected_mult = target / expected_sigma_annual
+    assert 0.0 < mult < 1.0, (
+        f"High-vol path should yield mult in (0,1), got {mult}")
+    assert abs(mult - expected_mult) < 1e-9, (
+        f"Mult {mult} != expected {expected_mult} (target/sigma_annual)")
+
+
+def test_vol_scaling_none_reproduces_default_behavior_exactly():
+    """The canonical regression test: ``vol_target_annual=None`` MUST
+    be byte-equivalent to the prior signature -- metrics, trades, and
+    equity_curve produced by the two calls must be identical."""
+    data = {"X": make_frame(random_walk(160, seed=13))}
+    base = run_replay(copy.deepcopy(data),
+                       FixedHoldStrategy(["X"], hold=4))
+    voled_none = run_replay(copy.deepcopy(data),
+                             FixedHoldStrategy(["X"], hold=4),
+                             vol_target_annual=None)
+    assert base["metrics"] == voled_none["metrics"]
+    assert base["trades"].equals(voled_none["trades"])
+    assert base["equity_curve"].equals(voled_none["equity_curve"])
+    # And the new return key must NOT appear when vol scaling is off.
+    assert "exposure_mults" not in voled_none
+
+
+def test_vol_scaling_reduces_position_size_in_high_vol_regime():
+    """End-to-end: a volatile-equity backtest with vol scaling ON
+    must produce SMALLER positions (or skip more entries on the heat
+    cap) than the same backtest with vol scaling OFF.
+
+    We use a wide swinging price series so the strategy's equity
+    naturally swings (driving realized vol up) and the multiplier
+    materially bites by mid-replay."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    # ~40% annual vol stock with mostly-rising drift.
+    n = 180
+    log_rets = rng.normal(0.0005, 0.025, n)   # vol ~ 40%
+    closes = 100.0 * np.cumprod(1.0 + log_rets)
+    data = {"X": make_frame(closes)}
+    # Wide sizing so positions actually consume meaningful equity and
+    # the scaler has a visible effect.
+    base = run_replay(copy.deepcopy(data),
+                       FixedHoldStrategy(["X"], hold=6, stop_frac=0.5),
+                       risk_pct=0.50, max_heat=1.0)
+    voled = run_replay(copy.deepcopy(data),
+                        FixedHoldStrategy(["X"], hold=6, stop_frac=0.5),
+                        risk_pct=0.50, max_heat=1.0,
+                        vol_target_annual=0.12, vol_window=30)
+    # The exposure_mults log must exist and contain values across the
+    # full timeline (one per day the vol scaler ran).
+    assert "exposure_mults" in voled
+    assert len(voled["exposure_mults"]) == voled["n_days"]
+    # By the end of the replay there must be at least SOME day where
+    # the scaler dropped below 1.0 (otherwise the test fixture isn't
+    # exercising scaling).
+    mults = [m for _, m in voled["exposure_mults"]]
+    assert min(mults) < 1.0, (
+        f"vol-scaler never engaged on this fixture — min mult = "
+        f"{min(mults)}. The test isn't actually exercising the code path.")
+    # And the scaled run must have STRICTLY fewer total-shares-bought
+    # than the baseline (smaller positions when scaler bites).
+    base_shares = base["trades"]["shares"].sum() if not base["trades"].empty else 0
+    voled_shares = voled["trades"]["shares"].sum() if not voled["trades"].empty else 0
+    assert voled_shares < base_shares, (
+        f"Vol scaling didn't reduce total shares-bought "
+        f"({voled_shares} >= {base_shares}).")
+
+
+def test_vol_scaling_causal_uses_only_past_equity():
+    """Look-ahead regression for the vol scaler. Mutating bars
+    strictly after a cut date must leave all decisions <= cut
+    byte-identical (the strategy's decisions AND the harness's
+    exposure_mult choices both depend only on equity history through
+    yesterday's close)."""
+    import numpy as np
+    rng = np.random.default_rng(19)
+    n = 200
+    log_rets = rng.normal(0.0003, 0.022, n)
+    closes = 100.0 * np.cumprod(1.0 + log_rets)
+    data = {"X": make_frame(closes)}
+    cut = data["X"].index[130]
+
+    base = run_replay(copy.deepcopy(data),
+                       FixedHoldStrategy(["X"], hold=5, stop_frac=0.5),
+                       risk_pct=0.50, max_heat=1.0,
+                       vol_target_annual=0.10, vol_window=30,
+                       record_decisions=True)
+
+    mutated = copy.deepcopy(data)
+    future_mask = mutated["X"].index > cut
+    mutated["X"].loc[future_mask, ["open", "high", "low", "close"]] *= 5.0
+    after = run_replay(mutated,
+                        FixedHoldStrategy(["X"], hold=5, stop_frac=0.5),
+                        risk_pct=0.50, max_heat=1.0,
+                        vol_target_annual=0.10, vol_window=30,
+                        record_decisions=True)
+
+    base_le = [d for d in base["decisions"] if d[0] <= cut]
+    after_le = [d for d in after["decisions"] if d[0] <= cut]
+    assert base_le == after_le, (
+        "Strategy decisions <= cut changed when future bars were "
+        "mutated — leak somewhere in the vol-scaling path.")
+
+    # Exposure mults <= cut must also be identical, since they read
+    # equity_rows which depends on prior closes only.
+    base_em = [(d, m) for d, m in base["exposure_mults"] if d <= cut]
+    after_em = [(d, m) for d, m in after["exposure_mults"] if d <= cut]
+    assert base_em == after_em, (
+        "exposure_mults <= cut changed when future bars were mutated.")
