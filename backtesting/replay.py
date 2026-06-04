@@ -203,6 +203,8 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                dd_cap_pct: float | None = None,
                vol_target_annual: float | None = None,
                vol_window: int = 63,
+               slippage_pct: float = SLIPPAGE_PCT,
+               brokerage_pct: float = BROKERAGE_PCT,
                close_at_end: bool = True,
                record_decisions: bool = False) -> dict:
     """Replay ``strategy`` over per-symbol daily ``data``.
@@ -249,6 +251,15 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             Default 63 (~3 trading months — the
             Barroso-Santa-Clara standard). Ignored when
             ``vol_target_annual is None``.
+        slippage_pct: per-fill slippage (positive number, e.g. 0.001 =
+            10 bps). Default matches ``config.SLIPPAGE_PCT``. SMOM-2
+            adds this so SMOM-3 can model brutal small-cap costs
+            (e.g. 0.004 = 40 bps) WITHOUT mutating module-level
+            globals — the default reproduces prior behaviour
+            byte-for-byte.
+        brokerage_pct: per-fill brokerage cost. Default matches
+            ``config.BROKERAGE_PCT``. Same regression-safe contract
+            as ``slippage_pct``.
         close_at_end: force-close open positions at the final bar's close
             so end-of-data positions become realised trades.
         record_decisions: also return the per-day decision log (used by the
@@ -307,9 +318,9 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             op = _price(o.symbol, t, "open")
             if pos is None or op is None:
                 continue
-            xfill = op * (1.0 - SLIPPAGE_PCT)
+            xfill = op * (1.0 - slippage_pct)
             proceeds = pos.shares * xfill
-            proceeds_net = proceeds * (1.0 - BROKERAGE_PCT)
+            proceeds_net = proceeds * (1.0 - brokerage_pct)
             cash += proceeds_net
             pnl = proceeds_net - pos.cost_basis
             trades.append({
@@ -358,7 +369,7 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             op = _price(o.symbol, t, "open")
             if op is None:
                 continue
-            fill = op * (1.0 + SLIPPAGE_PCT)
+            fill = op * (1.0 + slippage_pct)
             risk_per_share = fill - o.stop
             if risk_per_share <= 0:
                 continue  # invalid stop (not below entry) — cannot size
@@ -385,13 +396,13 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             if (_open_risk() + shares * risk_per_share) > max_heat * equity_now:
                 continue
             cost = shares * fill
-            cost_total = cost * (1.0 + BROKERAGE_PCT)
+            cost_total = cost * (1.0 + brokerage_pct)
             if cost_total > cash:
                 # Scale down to available cash rather than skip outright.
-                shares = int(cash // (fill * (1.0 + BROKERAGE_PCT)))
+                shares = int(cash // (fill * (1.0 + brokerage_pct)))
                 if shares <= 0:
                     continue
-                cost_total = shares * fill * (1.0 + BROKERAGE_PCT)
+                cost_total = shares * fill * (1.0 + brokerage_pct)
             cash -= cost_total
             positions[o.symbol] = Position(
                 symbol=o.symbol, entry_date=t, entry_price=fill, shares=shares,
@@ -453,7 +464,7 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             c = _price(sym, t_last, "close")
             if c is None:
                 continue
-            proceeds_net = pos.shares * c * (1.0 - BROKERAGE_PCT)
+            proceeds_net = pos.shares * c * (1.0 - brokerage_pct)
             cash += proceeds_net
             pnl = proceeds_net - pos.cost_basis
             trades.append({
