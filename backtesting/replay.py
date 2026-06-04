@@ -90,6 +90,16 @@ class Position:
     bars_held: int = 0
     highest_high: float = 0.0    # since entry (for a strategy's trailing stop)
     highest_close: float = 0.0
+    # Last close actually observed for this position. Used by the MTM
+    # step as a stale-carry when the symbol has no bar on a given
+    # timeline date (the replay timeline is the UNION of all symbol
+    # indexes, so a missing bar for ONE position on a date does not
+    # drop that date from the timeline — without stale-carry, MTM
+    # would silently exclude the position, producing a spurious
+    # equity-curve dip toward cash). Initialised to entry_price at
+    # fill so day-0 MTM is well-defined even before any close-bar
+    # update has run.
+    last_close: float = 0.0
 
 
 @dataclass
@@ -301,9 +311,22 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
                 stop=o.stop, risk_per_share=risk_per_share, cost_basis=cost_total,
                 bars_held=0, highest_high=_price(o.symbol, t, "high") or fill,
                 highest_close=_price(o.symbol, t, "close") or fill,
+                last_close=_price(o.symbol, t, "close") or fill,
             )
 
         # 2) Update per-position running stats at today's close, mark equity.
+        #
+        # STALE-CARRY MTM: when ``_price(close)`` is None for a position on
+        # the current date (the symbol has no bar today — e.g. asymmetric
+        # NSE coverage like muhurat sessions, partial-coverage holidays, or
+        # the last DB date when one symbol's data ends earlier than
+        # another's), we mark the position at its LAST KNOWN CLOSE
+        # (``p.last_close``). Without this carry, the position contributes
+        # 0 to MTM on missing-bar days and the equity curve dips toward
+        # cash — a spurious one-day artifact that is NOT a real economic
+        # drawdown. ``p.bars_held`` and ``p.highest_close`` still update
+        # only on REAL bars (no fictitious holding time / no fake highs);
+        # only the displayed MTM is stale-carried.
         mtm = 0.0
         for p in positions.values():
             c = _price(p.symbol, t, "close")
@@ -311,7 +334,10 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
             if c is not None:
                 p.bars_held += 1
                 p.highest_close = max(p.highest_close, c)
+                p.last_close = c
                 mtm += p.shares * c
+            else:
+                mtm += p.shares * p.last_close
             if hi is not None:
                 p.highest_high = max(p.highest_high, hi)
         equity = cash + mtm
