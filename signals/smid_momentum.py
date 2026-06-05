@@ -76,6 +76,12 @@ SMID_MOMENTUM_POOL_MULTIPLIER = 2          # top_n * this = momentum pool size
 SMID_VOL_WINDOW = 63                       # ~3 trading months
 SMID_MIN_MEDIAN_TRADED_VALUE = 1.0e7        # Rs 1 crore daily median
 
+# SMID-WEEKLY: tranched-portfolio pre-registered constant. 4 sleeves
+# matches the canonical 4-week rhythm. Each sleeve rebalances every
+# 4th week on a rotating cycle so the book trades on a WEEKLY rhythm
+# while each name's individual turnover stays roughly MONTHLY.
+SMID_TRANCHED_N_SLEEVES = 4
+
 
 @dataclass
 class SmidMomentumStrategy(MomentumStrategy):
@@ -97,6 +103,52 @@ class SmidMomentumStrategy(MomentumStrategy):
     momentum_pool_multiplier: int = SMID_MOMENTUM_POOL_MULTIPLIER
     vol_window: int = SMID_VOL_WINDOW
     min_median_traded_value: float = SMID_MIN_MEDIAN_TRADED_VALUE
+    # SMID-WEEKLY: pluggable rebalance cadence.
+    #   'monthly' -> first trading day of each calendar month (the
+    #                MOM-2 / SMOM-3 contract; default for byte-equivalence
+    #                with SMOM-3's reported numbers).
+    #   'weekly'  -> first trading day of each ISO week.
+    #   'always'  -> every call is a rebalance day (used by the
+    #                tranched wrapper which has its own gating).
+    rebalance_freq: str = "monthly"
+
+    # ── Rebalance gate override (SMID-WEEKLY) ──────────────────────────
+
+    def _is_rebalance_day(self, view: BarView) -> bool:
+        """Dispatch on ``rebalance_freq``. Default ``'monthly'`` defers
+        to the parent's month-boundary detection so existing callers
+        (SMOM-3 reports) are byte-equivalent. ``'weekly'`` fires on the
+        first trading day of each ISO week. ``'always'`` makes every
+        call a rebalance day — used by ``TranchedSmidMomentumStrategy``,
+        which has already gated by week + active-sleeve at the wrapper
+        layer before delegating in.
+        """
+        if self.rebalance_freq == "monthly":
+            return super()._is_rebalance_day(view)
+        if self.rebalance_freq == "weekly":
+            return self._is_iso_week_boundary(view)
+        if self.rebalance_freq == "always":
+            return True
+        raise ValueError(
+            f"unknown rebalance_freq {self.rebalance_freq!r}; expected "
+            f"'monthly' | 'weekly' | 'always'")
+
+    def _is_iso_week_boundary(self, view: BarView) -> bool:
+        """True iff the cutoff bar is in a different ISO week than the
+        immediately-prior causal bar. Stateless / data-derived (same
+        pattern as the parent's month-boundary detection)."""
+        cutoff = view.cutoff
+        cw = cutoff.isocalendar()
+        for sym in view.symbols():
+            if sym.startswith("^"):
+                continue
+            h = view.history(sym)
+            if len(h) < 2:
+                continue
+            prior = h.index[-2]
+            pw = prior.isocalendar()
+            return (cw.year != pw.year) or (cw.week != pw.week)
+        return False
 
     # ── decide ──────────────────────────────────────────────────────────
 
@@ -199,3 +251,117 @@ class SmidMomentumStrategy(MomentumStrategy):
                 orders.append(enter_order)
 
         return orders
+
+
+@dataclass
+class TranchedSmidMomentumStrategy:
+    """Tranched ("overlapping portfolios") wrapper around SMID momentum.
+
+    DESIGN — Antonacci-style time-diversified momentum
+    ==================================================
+    Split the capital implicitly across ``n_tranches`` sleeves
+    (default 4). On the first trading day of every ISO week, ONLY
+    ONE sleeve rebalances — the sleeve whose index matches the
+    current ISO-week number modulo ``n_tranches``. Each sleeve
+    therefore rotates every ``n_tranches`` weeks (~monthly per-name
+    turnover), but the BOOK trades a few names EVERY week — the
+    weekly rhythm ops asked for.
+
+    Per-sleeve top-N is the global ``top_n`` divided by
+    ``n_tranches`` (default 15 // 4 = 3 with a small remainder).
+    The four sleeves' positions sum to at most ``top_n``
+    simultaneously; the harness's ``max_positions`` cap still
+    applies globally.
+
+    Sleeve membership is INFERRED from each open position's
+    ``entry_date`` (its ISO-week index mod ``n_tranches``). No
+    instance state is kept between ``decide()`` calls — the
+    mapping is fully reconstructible from the harness's book.
+    This preserves the stateless contract of the underlying SMID
+    strategy and keeps the no-leak guarantees inherited.
+
+    Pre-registered: ``n_tranches = 4``. Matches the canonical
+    4-week month and is NOT tuned. Other tranche counts (2, 6)
+    would be separate experiments; we do not sweep this knob.
+    """
+    # Reuse the same SMID knobs as the underlying strategy so a
+    # caller doesn't have to specify them twice.
+    lookback_days: int = 252                  # MOM_LOOKBACK_DAYS
+    skip_days: int = 21                        # MOM_SKIP_DAYS
+    top_n: int = 15                            # MOM_TOP_N
+    atr_period: int = ATR_PERIOD
+    use_absolute_filter: bool = False
+    momentum_pool_multiplier: int = SMID_MOMENTUM_POOL_MULTIPLIER
+    vol_window: int = SMID_VOL_WINDOW
+    min_median_traded_value: float = SMID_MIN_MEDIAN_TRADED_VALUE
+    n_tranches: int = SMID_TRANCHED_N_SLEEVES
+
+    @staticmethod
+    def _iso_week_index(ts) -> int:
+        """A monotonic integer week index for an arbitrary timestamp
+        (ISO calendar). Combines (iso_year, iso_week) into a single
+        int so modulo arithmetic for the sleeve assignment is robust
+        across year boundaries.
+        """
+        cal = pd.Timestamp(ts).isocalendar()
+        return int(cal.year) * 53 + int(cal.week)
+
+    def _is_iso_week_boundary(self, view: BarView) -> bool:
+        """Re-implemented at the wrapper to avoid instantiating a
+        throwaway ``SmidMomentumStrategy`` just for the gate check."""
+        cutoff = view.cutoff
+        cw = cutoff.isocalendar()
+        for sym in view.symbols():
+            if sym.startswith("^"):
+                continue
+            h = view.history(sym)
+            if len(h) < 2:
+                continue
+            prior = h.index[-2]
+            pw = prior.isocalendar()
+            return (cw.year != pw.year) or (cw.week != pw.week)
+        return False
+
+    def decide(self, view: BarView, book: Book) -> list:
+        """Tranched rebalance: gate on ISO-week boundary, pick the
+        active sleeve, build a sub-book of just that sleeve's
+        positions, delegate to ``SmidMomentumStrategy(top_n=...,
+        rebalance_freq='always')`` for the actual SMID logic.
+        """
+        # 1) Weekly cadence at the wrapper layer.
+        if not self._is_iso_week_boundary(view):
+            return []
+
+        # 2) Which sleeve's turn is it?
+        cutoff_wk = self._iso_week_index(view.cutoff)
+        active_sleeve = cutoff_wk % self.n_tranches
+
+        # 3) Build a sub-book containing only positions that belong to
+        # the active sleeve (sleeve = week-index-of-entry mod n).
+        sleeve_positions = {
+            sym: pos for sym, pos in book.positions.items()
+            if self._iso_week_index(pos.entry_date) % self.n_tranches
+                == active_sleeve
+        }
+        sub_book = Book(cash=book.cash, equity=book.equity,
+                         positions=sleeve_positions)
+
+        # 4) Per-sleeve top-N. With top_n=15 and 4 sleeves, each sleeve
+        # targets 3 names. The book sum (across sleeves) is therefore
+        # ~12 of the harness's 15-slot ceiling under steady state —
+        # leaves some headroom for fills to actually land. Never below
+        # 1 (a single sleeve must hold at least one name).
+        per_sleeve_top_n = max(1, self.top_n // self.n_tranches)
+
+        sub_strat = SmidMomentumStrategy(
+            lookback_days=self.lookback_days,
+            skip_days=self.skip_days,
+            top_n=per_sleeve_top_n,
+            atr_period=self.atr_period,
+            use_absolute_filter=self.use_absolute_filter,
+            momentum_pool_multiplier=self.momentum_pool_multiplier,
+            vol_window=self.vol_window,
+            min_median_traded_value=self.min_median_traded_value,
+            rebalance_freq="always",   # wrapper already gated
+        )
+        return sub_strat.decide(view, sub_book)

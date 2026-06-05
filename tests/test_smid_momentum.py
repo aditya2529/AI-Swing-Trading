@@ -391,3 +391,207 @@ def test_replay_higher_brokerage_reduces_net_pnl():
     assert high_pnl < base_pnl, (
         f"Higher brokerage didn't reduce PnL: base={base_pnl:.2f}, "
         f"high={high_pnl:.2f}")
+
+
+# ── SMID-WEEKLY — rebalance cadence + tranched wrapper ─────────────────
+
+
+from signals.smid_momentum import TranchedSmidMomentumStrategy
+
+
+def test_monthly_freq_reproduces_smom2_baseline_exactly():
+    """``rebalance_freq='monthly'`` (the new default) MUST produce
+    byte-identical decisions, trades, and equity_curve as the SMOM-2
+    baseline that took no freq kwarg. Otherwise SMID-WEEKLY would
+    silently invalidate the SMOM-3 reported numbers."""
+    n = 360
+    data = {
+        "A": _linear_trend_with_vol(0.40, n=n, daily_vol=0.010, seed=51),
+        "B": _linear_trend_with_vol(0.20, n=n, daily_vol=0.006, seed=52),
+        "C": _linear_trend_with_vol(0.05, n=n, daily_vol=0.018, seed=53),
+    }
+    # Default (no freq kwarg)
+    s_default = SmidMomentumStrategy(top_n=2, momentum_pool_multiplier=2,
+                                       min_median_traded_value=0.0)
+    base = run_replay(copy.deepcopy(data), s_default, record_decisions=True)
+    # Explicit 'monthly'
+    s_explicit = SmidMomentumStrategy(top_n=2, momentum_pool_multiplier=2,
+                                        min_median_traded_value=0.0,
+                                        rebalance_freq="monthly")
+    explicit = run_replay(copy.deepcopy(data), s_explicit,
+                            record_decisions=True)
+    assert base["metrics"] == explicit["metrics"]
+    assert base["trades"].equals(explicit["trades"])
+    assert base["equity_curve"].equals(explicit["equity_curve"])
+    assert base["decisions"] == explicit["decisions"]
+
+
+def test_weekly_freq_gate_fires_only_at_iso_week_boundary():
+    """Unit-test the gate directly (independent of whether the
+    strategy emits orders): ``_is_rebalance_day`` must return True ONLY
+    on dates whose immediately-prior bar is in a DIFFERENT ISO week,
+    and False on every other day."""
+    n = 60
+    df = _linear_trend_with_vol(0.10, n=n, daily_vol=0.005, seed=61)
+    data = {"X": df}
+    strat = SmidMomentumStrategy(top_n=1, momentum_pool_multiplier=2,
+                                   min_median_traded_value=0.0,
+                                   rebalance_freq="weekly")
+    # Walk every trading day in the fixture and check the gate.
+    boundary_count = 0
+    for i in range(1, len(df)):
+        cutoff = df.index[i]
+        prior = df.index[i - 1]
+        view = BarView(data, cutoff=cutoff)
+        fired = strat._is_rebalance_day(view)
+        same_week = (cutoff.isocalendar().year == prior.isocalendar().year
+                      and cutoff.isocalendar().week == prior.isocalendar().week)
+        if same_week:
+            assert not fired, (
+                f"weekly gate fired on {cutoff.date()} which is in the "
+                f"SAME ISO week as prior {prior.date()}.")
+        else:
+            assert fired, (
+                f"weekly gate did NOT fire on {cutoff.date()} which is "
+                f"a NEW ISO week vs prior {prior.date()}.")
+            boundary_count += 1
+    assert boundary_count >= 10, (
+        f"fixture only had {boundary_count} ISO-week boundaries — "
+        f"calibration bug, expand the fixture.")
+
+
+def test_weekly_gate_fires_more_often_than_monthly_gate():
+    """Same data, both gates: weekly must accept ~4-5x more days as
+    rebalance days than monthly."""
+    n = 200
+    df = _linear_trend_with_vol(0.30, n=n, daily_vol=0.005, seed=71)
+    data = {"X": df}
+    monthly_strat = SmidMomentumStrategy(top_n=1, rebalance_freq="monthly")
+    weekly_strat = SmidMomentumStrategy(top_n=1, rebalance_freq="weekly")
+    n_monthly = 0
+    n_weekly = 0
+    for i in range(1, len(df)):
+        view = BarView(data, cutoff=df.index[i])
+        if monthly_strat._is_rebalance_day(view):
+            n_monthly += 1
+        if weekly_strat._is_rebalance_day(view):
+            n_weekly += 1
+    assert n_weekly >= 3 * n_monthly, (
+        f"weekly gate fires {n_weekly} vs monthly {n_monthly} — "
+        f"expected ~4-5x. Cadence parameter may not be applied.")
+
+
+def test_always_freq_makes_every_call_a_rebalance():
+    """``rebalance_freq='always'`` returns True from the gate
+    regardless of cutoff. Unit-tested directly so we don't conflate
+    'gate is open' with 'strategy chose to emit orders'."""
+    n = 30
+    df = _linear_trend_with_vol(0.10, n=n)
+    data = {"X": df}
+    strat = SmidMomentumStrategy(top_n=1, rebalance_freq="always")
+    for i in range(1, len(df)):
+        view = BarView(data, cutoff=df.index[i])
+        assert strat._is_rebalance_day(view), (
+            f"'always' freq did NOT return True on {df.index[i].date()}.")
+
+
+def test_unknown_freq_raises():
+    """Defensive: typo'd freq raises immediately, doesn't silently
+    fall through to a default."""
+    n = 320
+    data = {"A": _linear_trend_with_vol(0.40, n=n)}
+    with pytest.raises(ValueError, match="rebalance_freq"):
+        run_replay(
+            copy.deepcopy(data),
+            SmidMomentumStrategy(top_n=1, rebalance_freq="bogus"),
+            record_decisions=True,
+        )
+
+
+def test_tranched_fires_only_on_iso_week_boundary():
+    """The tranched wrapper inherits the weekly cadence: at most one
+    fire per ISO week — even though within a week one sleeve is active."""
+    n = 360
+    data = {
+        "A": _linear_trend_with_vol(0.40, n=n, daily_vol=0.010, seed=91),
+        "B": _linear_trend_with_vol(0.20, n=n, daily_vol=0.006, seed=92),
+        "C": _linear_trend_with_vol(0.05, n=n, daily_vol=0.018, seed=93),
+        "D": _linear_trend_with_vol(0.10, n=n, daily_vol=0.012, seed=94),
+    }
+    strat = TranchedSmidMomentumStrategy(top_n=8, n_tranches=4,
+                                            momentum_pool_multiplier=2,
+                                            min_median_traded_value=0.0)
+    res = run_replay(copy.deepcopy(data), strat, record_decisions=True)
+    fired_dates = [t for t, orders in res["decisions"] if orders]
+    pairs = [(t.isocalendar().year, t.isocalendar().week)
+              for t in fired_dates]
+    assert len(pairs) == len(set(pairs)), (
+        f"Tranched wrapper fired more than once in some ISO week.")
+
+
+def test_tranched_active_sleeve_rotates_through_n_sleeves():
+    """Over many ISO weeks the tranched wrapper must visit every sleeve
+    index 0..n-1 — none should be skipped (proves the modulo rotation
+    is correct).
+
+    We instrument the wrapper indirectly by examining each rebalance
+    day's ISO-week index and confirming the set of week_index % n
+    values covers all sleeves at least once across the run.
+    """
+    n = 360
+    data = {
+        "A": _linear_trend_with_vol(0.40, n=n, daily_vol=0.010, seed=101),
+        "B": _linear_trend_with_vol(0.20, n=n, daily_vol=0.006, seed=102),
+    }
+    strat = TranchedSmidMomentumStrategy(top_n=4, n_tranches=4,
+                                            momentum_pool_multiplier=2,
+                                            min_median_traded_value=0.0)
+    res = run_replay(copy.deepcopy(data), strat, record_decisions=True)
+    fired_dates = [t for t, orders in res["decisions"] if orders]
+    # ISO-week index helper inside the test.
+    def _wk(t):
+        c = t.isocalendar()
+        return int(c.year) * 53 + int(c.week)
+    sleeves_visited = {_wk(t) % 4 for t in fired_dates}
+    # Need at least 8 fires to be confident all 4 sleeves get a chance.
+    assert len(fired_dates) >= 8
+    assert sleeves_visited == {0, 1, 2, 3}, (
+        f"Tranched rotation skipped some sleeves: visited "
+        f"{sleeves_visited}.")
+
+
+def test_tranched_no_leak_end_to_end():
+    """Future-mutation invariance for the tranched wrapper. The
+    wrapper does no causal reads of its own (it only inspects the
+    book's entry_date stamps), but the underlying SMID strategy
+    does — verify the wrapper doesn't reintroduce a leak."""
+    n = 360
+    data = {
+        "A": _linear_trend_with_vol(0.45, n=n, daily_vol=0.010, seed=111),
+        "B": _linear_trend_with_vol(0.20, n=n, daily_vol=0.006, seed=112),
+        "C": _linear_trend_with_vol(0.05, n=n, daily_vol=0.020, seed=113),
+        "D": _linear_trend_with_vol(0.10, n=n, daily_vol=0.012, seed=114),
+    }
+    cut_idx = 320
+    cut = list(data["A"].index)[cut_idx]
+
+    s1 = TranchedSmidMomentumStrategy(top_n=8, n_tranches=4,
+                                        momentum_pool_multiplier=2,
+                                        min_median_traded_value=0.0)
+    base = run_replay(copy.deepcopy(data), s1, record_decisions=True)
+
+    mutated = copy.deepcopy(data)
+    for sym, df in mutated.items():
+        mask = df.index > cut
+        df.loc[mask, ["open", "high", "low", "close"]] *= 4.0
+
+    s2 = TranchedSmidMomentumStrategy(top_n=8, n_tranches=4,
+                                        momentum_pool_multiplier=2,
+                                        min_median_traded_value=0.0)
+    after = run_replay(mutated, s2, record_decisions=True)
+
+    base_le = [d for d in base["decisions"] if d[0] <= cut]
+    after_le = [d for d in after["decisions"] if d[0] <= cut]
+    assert base_le == after_le, (
+        "Tranched wrapper decisions <= cut changed under future "
+        "mutation — leak somewhere in the wrapper or sub-strategy.")
