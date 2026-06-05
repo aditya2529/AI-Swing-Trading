@@ -1,0 +1,35 @@
+# logrotate config for the Oracle Cloud paper-trading VM.
+# Run nightly by crontab (see deploy/crontab.sample entry #4).
+#
+# Goal: VM disk never fills, but we ALWAYS have ~30 days of cron + EOD
+# logs to debug any silent failure.
+
+/opt/swing/logs/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # noerror chain — logrotate errors are themselves logged to
+    # /var/log/messages but never fail the cron.
+    nocopytruncate
+    create 0644 swing swing
+    olddir /opt/swing/logs/archive
+    createolddir 0755 swing swing
+}
+
+# Keep cron-redirected stdout/stderr logs shorter (cron_*) — they
+# duplicate info from the runner's own logs.
+/opt/swing/logs/cron_*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    nocopytruncate
+    create 0644 swing swing
+    olddir /opt/swing/logs/archive
+    createolddir 0755 swing swing
+}

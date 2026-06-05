@@ -1,0 +1,40 @@
+# Sample crontab for the Oracle Cloud paper-trading VM.
+# Install with: `crontab deploy/crontab.sample`
+# Verify with:  `crontab -l`
+#
+# TIMEZONE is set EXPLICITLY (intraday project's #1 scheduler bug: a
+# UTC cron firing what we thought were IST times). CRON_TZ pins the
+# timezone for ALL entries in this file; it does NOT affect the OS
+# wall clock or other crontabs.
+#
+# Asia/Kolkata = UTC+5:30 (no DST). NSE session: 09:15 - 15:30 IST.
+# We fire the EOD runner AFTER close, at 15:45 IST, to ensure today's
+# bar has fully resolved before the decision is made.
+
+CRON_TZ=Asia/Kolkata
+PYTHON=/opt/swing/.venv/bin/python
+APP=/opt/swing
+LOG=/opt/swing/logs
+
+# 1. EOD decision (15:45 IST, Mon-Fri). The runner is internally
+#    idempotent — a re-run on the same date is a NO-OP. Stdout +
+#    stderr both go to the date-stamped log; the runner ALSO writes
+#    to a dedicated logfile internally for completeness.
+45 15 * * 1-5  cd $APP && PAPER_MODE=1 $PYTHON -m live.eod_runner >> $LOG/cron_eod_$(date +\%Y\%m\%d).log 2>&1
+
+# 2. Health check (16:30 IST, Mon-Fri). A SEPARATE process so a full
+#    crash of the EOD runner cannot suppress the alert. If no ok /
+#    no_op run exists for today by this time, a Telegram alert
+#    fires; otherwise silent.
+30 16 * * 1-5  cd $APP && PAPER_MODE=1 $PYTHON -m live.health_check >> $LOG/cron_health_$(date +\%Y\%m\%d).log 2>&1
+
+# 3. Daily backup of paper_ledger.db (15:30 IST, Mon-Fri). Belt-and-
+#    braces — the EOD runner also takes a pre-run backup, but this
+#    one is independent so a runner crash that corrupts the DB can
+#    still be rolled back to "15:30 IST yesterday".
+30 15 * * 1-5  cp $APP/paper_ledger.db $APP/backups/paper_ledger_$(date +\%Y\%m\%dT\%H\%M\%S).db
+
+# 4. Log rotation (00:00 IST, every day). Runs the logrotate state
+#    file deploy/logrotate.sample explicitly so we do not depend on
+#    the OS's logrotate timing.
+0 0 * * *      logrotate -s $LOG/logrotate.state $APP/deploy/logrotate.sample

@@ -1,10 +1,26 @@
 # AI Swing Trading — runtime dependencies
-# Rules-based breakout swing v1: NO ML libraries by design (bootstrap §2a).
-# (torch / xgboost / hmmlearn / shap / scikit-learn are intentionally absent;
-#  they only return if an ML filter provably beats the simple version later.)
-pandas>=2.0
-numpy>=1.26
-yfinance>=0.2.40       # free daily backfill + cross-source reconciliation
-requests>=2.31         # Upstox historical REST adapter
-python-dotenv>=1.0     # .env secret loading
-pytest>=8.0            # the look-ahead gate + replay-contract tests
+#
+# DEPLOY HARDENING (paper-trading VM)
+# ===================================
+# Versions are PINNED with == so the Oracle Cloud VM and the local
+# dev box run identical stacks. yfinance is the main flake risk
+# (HTTP 404s, silently changed schemas across patch releases); the
+# adapter's retry-with-backoff absorbs transient issues but the
+# pinned version protects against schema changes. Bump ONLY after a
+# manual smoke test against the existing market_data.db.
+#
+# Rules-based v1: NO ML libraries by design (bootstrap §2a). NO
+# C-extension threading means the heap-corruption class of bug that
+# killed the intraday project cannot occur. Telegram client uses
+# stdlib urllib — no requests dependency on the alert path.
+
+pandas==2.2.3
+numpy==1.26.4
+yfinance==0.2.55       # daily backfill + live feed (TR-adjusted)
+requests==2.32.3       # Upstox historical REST adapter (backfill only)
+python-dotenv==1.0.1   # .env secret loading
+pytest==8.3.4          # look-ahead gate + replay-contract tests
+# Standard-library tzdata may be missing on minimal Oracle images;
+# the runner falls back to a fixed UTC+5:30 offset if zoneinfo
+# can't resolve "Asia/Kolkata". Install OS-level tzdata for cleaner
+# logs (see deploy/oracle_setup.md).
