@@ -213,11 +213,26 @@ def concentration_flags(trades: pd.DataFrame,
 def binomial_p_value(wins: int, n: int, null_p: float = 0.5) -> float:
     """One-sided ``P(X >= wins | n, p = null_p)``. Null = no edge,
     coin-flip win rate. Small p ⇒ observed result unlikely under chance.
+
+    For small n (<= 1000) we compute the exact tail sum. For large n,
+    ``math.comb(n, k)`` produces ints that overflow when multiplied by
+    floats (the WEEKLY-SWEEP RSI2 strategy hit this at n ≈ 10k+), so
+    we fall back to a normal approximation with continuity correction —
+    standard textbook approach, accurate to ~1e-4 at this n.
     """
     if n == 0:
         return 1.0
-    return sum(math.comb(n, k) * (null_p ** k) * ((1 - null_p) ** (n - k))
-                for k in range(wins, n + 1))
+    if n <= 1000:
+        return sum(math.comb(n, k) * (null_p ** k) * ((1 - null_p) ** (n - k))
+                    for k in range(wins, n + 1))
+    # Normal approximation (CLT) with continuity correction.
+    mean = n * null_p
+    sd = math.sqrt(n * null_p * (1.0 - null_p))
+    if sd <= 0:
+        return 1.0
+    z = (wins - 0.5 - mean) / sd
+    # P(X >= wins) ≈ 1 - Phi(z) = Phi(-z); use erfc for numerical stability.
+    return 0.5 * math.erfc(z / math.sqrt(2.0))
 
 
 def bootstrap_pf_ci(trades: pd.DataFrame, *, n_resamples: int = 2000,
