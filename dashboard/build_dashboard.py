@@ -132,6 +132,35 @@ def nifty_return_over(bench: list[dict], dates: list[str]) -> float | None:
     return round((span[-1] - span[0]) / span[0] * 100, 2)
 
 
+# ── Market regime (Nifty level + 200-DMA bull/bear) ───────────────────
+def fetch_market_regime() -> dict:
+    """Current Nifty 50 level and 200-DMA regime. Independent of the
+    ledgers, so it ALWAYS populates (immediate value). {} on failure."""
+    try:
+        import yfinance as yf  # lazy
+        df = yf.download("^NSEI", period="400d", progress=False, auto_adjust=True)
+        if df is None or df.empty:
+            return {}
+        close = df["Close"].dropna()
+        if hasattr(close, "columns"):
+            close = close.iloc[:, 0]
+        if len(close) < 50:
+            return {}
+        level = float(close.iloc[-1])
+        dma = float(close.tail(200).mean())
+        prev = float(close.iloc[-2]) if len(close) > 1 else level
+        d20 = float(close.iloc[-21]) if len(close) > 21 else level
+        return {
+            "level": round(level, 0), "dma200": round(dma, 0),
+            "pct_vs_dma": round((level - dma) / dma * 100, 2),
+            "day_change_pct": round((level - prev) / prev * 100, 2),
+            "mom20_pct": round((level - d20) / d20 * 100, 2),
+            "regime": "BULLISH" if level >= dma else "BEARISH",
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 # ── Compute metrics ───────────────────────────────────────────────────
 def compute(L: dict) -> dict:
     eq = L.get("equity", [])
@@ -201,7 +230,7 @@ def compute(L: dict) -> dict:
 
 
 # ── Render ────────────────────────────────────────────────────────────
-def render(engines_data: list, benchmark: list) -> str:
+def render(engines_data: list, benchmark: list, regime: dict) -> str:
     now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     any_data = any(e["metrics"]["curve"] for e in engines_data)
     empty = "" if any_data else (
@@ -210,7 +239,7 @@ def render(engines_data: list, benchmark: list) -> str:
         'weekly buys from its first week. The Nifty benchmark line appears once data flows. '
         'Until then both hold flat at ₹5,00,000 — nominal, not a fault.</div>')
     payload = json.dumps({
-        "now": now, "benchmark": benchmark,
+        "now": now, "benchmark": benchmark, "regime": regime,
         "engines": [{"key": e["key"], "label": e["label"], "icon": e["icon"],
                      "color": e["color"], "note": e["note"], "m": e["metrics"]}
                     for e in engines_data],
@@ -270,6 +299,7 @@ _TEMPLATE = r"""<!doctype html>
 <body><div class="wrap">
   <h1>◢ SWING DUAL-ENGINE DECK ◣</h1>
   <div class="sub">MONTHLY vs WEEKLY vs NIFTY · PAPER CAPITAL · SYNC <span id="now"></span></div>
+  <div id="regime"></div>
   __EMPTY__
   <div class="vs" id="vs"></div>
   <div class="card"><h2 style="color:#9fb3d1">▚ Head-to-Head Equity (vs Nifty 50)</h2><canvas id="chart" height="92"></canvas></div>
@@ -281,6 +311,22 @@ const P = __PAYLOAD__;
 document.getElementById("now").textContent = P.now;
 const inr = n => "₹" + Math.round(n).toLocaleString("en-IN");
 const sgn = (n,s="") => (n==null?'<span class="num">—</span>':`<span class="num ${n>=0?'pos':'neg'}">${n>=0?'▲':'▼'} ${n}${s}</span>`);
+
+// Market regime card (Nifty level + 200-DMA bull/bear)
+const RG = P.regime || {};
+if(RG.regime){
+  const bull = RG.regime==='BULLISH'; const col = bull?'#34d399':'#fb7185';
+  const note = bull ? 'Risk-on backdrop — momentum tailwind.' : 'Risk-off backdrop — momentum headwind; expect deeper drawdowns.';
+  document.getElementById("regime").innerHTML = `
+   <div class="card" style="border-color:${col}55;border-left:4px solid ${col};display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin-bottom:18px">
+     <div style="font-family:Orbitron;font-weight:900;font-size:19px;letter-spacing:2px;color:${col}">${bull?'🟢':'🔴'} MARKET: ${RG.regime}</div>
+     <div class="num" style="color:var(--mut)">NIFTY 50 · <b style="color:var(--ink);font-size:16px">${RG.level.toLocaleString('en-IN')}</b></div>
+     <div class="num" style="color:var(--mut)">200-DMA ${RG.dma200.toLocaleString('en-IN')} · <span class="${RG.pct_vs_dma>=0?'pos':'neg'}">${RG.pct_vs_dma>=0?'+':''}${RG.pct_vs_dma}%</span></div>
+     <div class="num" style="color:var(--mut)">1D <span class="${RG.day_change_pct>=0?'pos':'neg'}">${RG.day_change_pct>=0?'+':''}${RG.day_change_pct}%</span></div>
+     <div class="num" style="color:var(--mut)">~1M <span class="${RG.mom20_pct>=0?'pos':'neg'}">${RG.mom20_pct>=0?'+':''}${RG.mom20_pct}%</span></div>
+     <div style="flex:1;min-width:160px;color:var(--mut);font-size:13px">${note}</div>
+   </div>`;
+}
 
 // VS strip
 document.getElementById("vs").innerHTML = P.engines.map(e=>`
@@ -379,11 +425,14 @@ def main() -> int:
                 else round(e["metrics"]["total_ret_pct"]
                            - nifty_return_over(benchmark, e["metrics"]["dates"]), 2))
 
-    OUT_HTML.write_text(render(engines_data, benchmark), encoding="utf-8")
+    regime = fetch_market_regime()
+    OUT_HTML.write_text(render(engines_data, benchmark, regime), encoding="utf-8")
     for e in engines_data:
         print(f"[dashboard] {e['key']}: {e['note']} | equity Rs "
               f"{e['metrics']['equity']:,.0f} | alpha {e['metrics']['alpha_vs_nifty']}")
-    print(f"[dashboard] nifty points: {len(benchmark)} | wrote {OUT_HTML}")
+    print(f"[dashboard] nifty points: {len(benchmark)} | "
+          f"regime: {regime.get('regime', 'n/a')} (Nifty {regime.get('level', '?')}) "
+          f"| wrote {OUT_HTML}")
     return 0
 
 
