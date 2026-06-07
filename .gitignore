@@ -29,6 +29,10 @@ env/
 logs/*.log
 *.report.json
 
+# ── Dashboard (generated locally; source is build_dashboard.py) ─────────
+dashboard/swing_dashboard.html
+dashboard/_cache_*.db
+
 # ── OS / editor cruft ───────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
