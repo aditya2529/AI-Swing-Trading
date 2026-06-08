@@ -44,9 +44,9 @@ INITIAL_CAPITAL = 500_000.0
 
 ENGINES = [
     {"key": "monthly", "label": "MONTHLY ENGINE", "icon": "🟦", "color": "#22d3ee",
-     "remote": "/opt/swing/paper_ledger.db"},
+     "ledger": "paper_ledger.db"},
     {"key": "weekly", "label": "WEEKLY ENGINE", "icon": "🟪", "color": "#e879f9",
-     "remote": "/opt/swing/paper_ledger_weekly.db"},
+     "ledger": "paper_ledger_weekly.db"},
 ]
 OUT_HTML = HERE / "swing_dashboard.html"
 
@@ -405,9 +405,8 @@ document.getElementById("engines").innerHTML = P.engines.map(e=>{
 def main() -> int:
     engines_data = []
     for e in ENGINES:
-        local = HERE / f"_cache_{e['key']}.db"
-        ok, note = refresh(e["remote"], local)
-        L = read_ledger(local)
+        L = read_ledger(PROJECT_ROOT / e["ledger"])
+        note = "local" if L.get("exists") else "no run yet"
         if not L.get("exists"):
             L = {"exists": False, "equity": [], "positions": [], "trades": [],
                  "runs": [], "cash": INITIAL_CAPITAL}

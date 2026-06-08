@@ -489,6 +489,7 @@ def run_replay(data: dict, strategy, *, initial_capital: float = INITIAL_CAPITAL
         "trades": trades_df,
         "equity_curve": equity_curve,
         "final_cash": cash,
+        "open_positions": positions,   # symbol -> Position (additive; live runner reads this)
         "n_days": len(timeline),
         "start": timeline[0] if timeline else None,
         "end": timeline[-1] if timeline else None,
